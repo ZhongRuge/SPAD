@@ -1,0 +1,39 @@
+# ==========================================
+# SPAD 数据压缩仿真配置文件
+# ==========================================
+
+# 1. 传感器物理参数 (Sensor Hardware)
+sensor:
+  width: 200            # 阵列宽度
+  height: 200           # 阵列高度
+  fps: 250000           # 帧率 (250k fps，每帧曝光时间约 4us)
+  pde: 0.15             # 光子探测效率 (15%)
+  dead_time_ns: 50      # 死区时间 (纳秒，影响高光饱和情况)
+
+# 2. 仿真运行参数 (Simulation Control)
+simulation:
+  total_frames: 10000   # 仿真总帧数
+  batch_size: 1000      # 批处理帧数 (防止内存溢出)
+  random_seed: 42       # 随机种子，保证每次生成同样的数据对比不同算法
+
+# 3. 场景与光学参数 (Scene & Optics)
+# 决定了空间相关性和时间相关性
+scene:
+  type: "uniform_poisson" # 场景类型 (测试差分编码的关键)
+  background_cps: 500   # 背景光强度 (每像素每秒到达的光子数，测试 AER 的抗压能力)
+  signal_cps: 10000     # 目标光源强度 (高亮区域)
+  target_radius: 20     # 发光目标的半径 (像素)
+  velocity_pps: 5000    # 目标移动速度 (像素/秒，测试时间相关性)
+
+# 4. 传感器内部噪声 (Internal Non-idealities)
+# 破坏数据规律性、降低 RLE 压缩率的元凶
+noise:
+  dcr_cps: 100          # 暗计数率 (每个像素每秒产生的热噪声)
+  crosstalk_prob: 0.02  # 光学串扰概率 (2%，破坏空间独立性)
+  afterpulsing_prob: 0.01 # 后脉冲概率 (1%，破坏时间独立性)
+
+# 5. I/O 与存储层 (Storage)
+io:
+  output_dir: "./data"
+  filename: "spad_dataset.bin"
+  save_as_bits: true    # 将 8 个像素打包为 1 Byte 存储

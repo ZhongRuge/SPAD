@@ -1,0 +1,13 @@
+# Ignore everything by default.
+*
+
+# Keep directories visible so Git can discover allowed files inside them.
+!*/
+
+# Keep this rule file tracked.
+!.gitignore
+
+# Only allow Python source, binary dataset, and YAML config files.
+!*.py
+!*.bin
+!*.yaml
