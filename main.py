@@ -1,59 +1,61 @@
-# & "G:/SPAD/SPAD_Code/.venv/Scripts/python.exe" -m pip install numpy
 import os
-import yaml
 import numpy as np
-from generate_signal import SignalGenerator
-from add_noise import NoiseInjector
-
-def load_config(path="config.yaml"):
-    with open(path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+from signal_generator import SignalGenerator
+from noise_injector import NoiseInjector
+from simulation_io import append_ground_truth
+from simulation_io import build_metadata
+from simulation_io import load_config
+from simulation_io import resolve_output_paths
+from simulation_io import resolve_total_frames
+from simulation_io import write_metadata
+from simulation_io import write_video_batch
 
 def run_simulation():
-    # 1. 加载配置
     config = load_config()
-    total_frames = config['simulation']['total_frames']
-    batch_size = config['simulation']['batch_size']
-    
-    # 确保输出目录存在
-    out_dir = config['io']['output_dir']
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, config['io']['filename'])
+    total_frames = resolve_total_frames(config)
+    batch_size = int(config["simulation"]["batch_size"])
+    seed = int(config["simulation"].get("random_seed", 42))
+    save_as_bits = bool(config["io"].get("save_as_bits", True))
+    paths = resolve_output_paths(config)
 
-    # 2. 初始化模块
-    generator = SignalGenerator(config)
-    noise_injector = NoiseInjector(config)
+    seed_sequence = np.random.SeedSequence(seed)
+    generator_seed, noise_seed = seed_sequence.spawn(2)
+    generator_rng = np.random.default_rng(generator_seed)
+    noise_rng = np.random.default_rng(noise_seed)
 
-    print(f"开始生成数据: {config['sensor']['width']}x{config['sensor']['height']}, 总帧数: {total_frames}")
+    generator = SignalGenerator(config, generator_rng)
+    noise_injector = NoiseInjector(config, noise_rng)
 
-    # 3. 分批生成与追加写入
-    with open(out_path, 'wb') as f: # 'wb' 会覆盖旧文件，如果想一直追加可以用 'ab'
-        for i in range(0, total_frames, batch_size):
-            # 保证最后一批不会超出总帧数
-            current_batch_size = min(batch_size, total_frames - i)
-            
-            # 步骤 A: 生成信号
-            clean_data = generator.generate_batch(current_batch_size)
-            
-            # 步骤 B: 注入噪声 (当前为空)
-            noisy_data = noise_injector.apply_noise(clean_data)
-            
-            # 步骤 C: 位打包 (8个uint8压缩成1个byte，极大幅度减小体积)
-            packed_data = np.packbits(noisy_data)
-            
-            # 步骤 D: 写入二进制文件
-            f.write(packed_data.tobytes())
-            
-            print(f"已处理 {i + current_batch_size} / {total_frames} 帧")
+    metadata = build_metadata(config, total_frames, seed, paths)
+    write_metadata(paths["meta_path"], metadata)
 
-    # 简单验证一下文件大小
-    file_size_mb = os.path.getsize(out_path) / (1024 * 1024)
-    print(f"\n生成完毕！文件保存在: {out_path}")
-    print(f"文件大小: {file_size_mb:.2f} MB")
-    
-    # 理论大小计算: (10000帧 * 200 * 200) / 8 bit = 50,000,000 bytes ≈ 47.68 MB
-    # 你可以对比一下输出结果是否对得上
+    print(
+        f"开始生成: {metadata['width']}x{metadata['height']}, "
+        f"共 {total_frames} 帧, save_as_bits={save_as_bits}, seed={seed}"
+    )
+
+    with open(paths["data_path"], "wb") as data_file, open(
+        paths["ground_truth_path"], "w", encoding="utf-8"
+    ) as gt_file:
+        for start_frame in range(0, total_frames, batch_size):
+            current_batch_size = min(batch_size, total_frames - start_frame)
+            clean_batch, ground_truth_batch = generator.generate_batch(current_batch_size)
+            noisy_batch = noise_injector.apply_noise(clean_batch)
+
+            write_video_batch(data_file, noisy_batch, save_as_bits)
+            append_ground_truth(gt_file, ground_truth_batch)
+
+            processed_frames = start_frame + current_batch_size
+            print(f"已处理 {processed_frames} / {total_frames} 帧")
+
+    file_size_mb = os.path.getsize(paths["data_path"]) / (1024 * 1024)
+    print(
+        f"\n生成完毕！\n"
+        f"二进制文件: {paths['data_path']}\n"
+        f"元数据文件: {paths['meta_path']}\n"
+        f"真值文件: {paths['ground_truth_path']}\n"
+        f"文件大小: {file_size_mb:.2f} MB"
+    )
 
 if __name__ == "__main__":
     run_simulation()
-    

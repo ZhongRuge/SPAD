@@ -1,72 +1,82 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import yaml
-import os
+from simulation_io import load_config
+from simulation_io import load_video_matrix
+from simulation_io import read_metadata
+from simulation_io import resolve_output_paths
 
-def load_config(path="config.yaml"):
-    with open(path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
-
-def visualize_interactive():
-    # 1. 读取配置和文件
+def visualize():
     config = load_config()
-    width = config['sensor']['width']
-    height = config['sensor']['height']
-    filepath = os.path.join(config['io']['output_dir'], config['io']['filename'])
-    
-    print(f"正在读取文件: {filepath} ...")
-    packed_data = np.fromfile(filepath, dtype=np.uint8)
-    unpacked_data = np.unpackbits(packed_data)
-    
-    pixels_per_frame = width * height
-    total_frames = len(unpacked_data) // pixels_per_frame
-    print(f"解析成功！共加载 {total_frames} 帧。可以使用左右方向键切换查看。")
-    
-    # 2. 重塑为 (frames, height, width) 的三维张量
-    # 注意：200x200x10000 占用约 400MB 内存，普通电脑完全没问题
-    video_matrix = unpacked_data.reshape((total_frames, height, width))
-    
-    # 3. 设置交互式画布
-    fig, ax = plt.subplots(figsize=(6, 6))
-    curr_idx = 0  # 当前显示的帧索引
-    
-    # 初始化第一帧画面
-    im = ax.imshow(video_matrix[curr_idx], cmap='gray', interpolation='nearest', vmin=0, vmax=1)
-    
-    # 定义更新标题的函数
-    def update_title():
-        sparsity = np.mean(video_matrix[curr_idx])
-        ax.set_title(f"SPAD Frame: {curr_idx} / {total_frames - 1}\nSparsity: {sparsity:.2%}")
-        fig.canvas.draw_idle() # 触发重绘
+    paths = resolve_output_paths(config)
+    meta = read_metadata(paths["meta_path"])
+    video_matrix = load_video_matrix(paths["data_path"], meta)
 
-    update_title()
+    width = meta["width"]
+    height = meta["height"]
+    total_frames = meta["total_frames"]
+    save_as_bits = meta.get("save_as_bits", True)
+
+    print(f"读取元数据: {width}x{height}, 共 {total_frames} 帧, PackBits模式: {save_as_bits}")
+
+    state = {
+        'curr_idx': 0,
+        'playing': False,
+        'step': 1
+    }
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    plt.subplots_adjust(bottom=0.2)
+    im = ax.imshow(video_matrix[0], cmap='gray', interpolation='nearest', vmin=0, vmax=1)
     ax.axis('off')
 
-    # 4. 定义键盘交互事件
-    def on_key_press(event):
-        nonlocal curr_idx
-        # 按右键：下一帧
-        if event.key == 'right':
-            curr_idx = (curr_idx + 1) % total_frames
-        # 按左键：上一帧
-        elif event.key == 'left':
-            curr_idx = (curr_idx - 1) % total_frames
-        else:
-            return  # 按了其他键不作处理
-            
-        # 更新画面数据和标题
-        im.set_data(video_matrix[curr_idx])
-        update_title()
+    def update_display():
+        idx = state['curr_idx']
+        im.set_data(video_matrix[idx])
+        sparsity = np.mean(video_matrix[idx])
+        ax.set_title(f"Frame: {idx} / {total_frames - 1}\nSparsity: {sparsity:.2%}")
+        fig.canvas.draw_idle()
 
-    # 绑定键盘事件
-    fig.canvas.mpl_connect('key_press_event', on_key_press)
-    
-    # 提示信息
-    plt.figtext(0.5, 0.01, "Press ⬅️ Left or Right ➡️ Arrow Keys to navigate frames", 
-                ha="center", fontsize=10, bbox={"facecolor":"orange", "alpha":0.5, "pad":5})
-    
-    # 显示窗口 (阻塞式，直到关闭窗口)
+    def on_key(event):
+        if event.key == 'right':
+            state['curr_idx'] = (state['curr_idx'] + 1) % total_frames
+        elif event.key == 'left':
+            state['curr_idx'] = (state['curr_idx'] - 1) % total_frames
+        elif event.key == 'down':
+            state['curr_idx'] = (state['curr_idx'] + 100) % total_frames
+        elif event.key == 'up':
+            state['curr_idx'] = (state['curr_idx'] - 100) % total_frames
+        elif event.key == 'pageup':
+            state['curr_idx'] = (state['curr_idx'] + 1000) % total_frames
+        elif event.key == 'pagedown':
+            state['curr_idx'] = (state['curr_idx'] - 1000) % total_frames
+        elif event.key == ' ': # 空格键切换播放/暂停
+            state['playing'] = not state['playing']
+            print("Auto-play:", "ON" if state['playing'] else "OFF")
+        else:
+            return
+        update_display()
+
+    def on_tick():
+        if state['playing']:
+            state['curr_idx'] = (state['curr_idx'] + 5) % total_frames
+            update_display()
+
+    timer = fig.canvas.new_timer(interval=30)
+    timer.add_callback(on_tick)
+    timer.start()
+
+    fig.canvas.mpl_connect('key_press_event', on_key)
+
+    instructions = (
+        "Controls:\n"
+        "Left/Right: ±1 frame  |  Up/Down: ±100 frames\n"
+        "PgUp/PgDn: ±1000 frames  |  Space: Play/Pause"
+    )
+    plt.figtext(0.5, 0.05, instructions, ha="center", fontsize=9, 
+                bbox={"facecolor":"lightblue", "alpha":0.5, "pad":5})
+
+    print(f"Loaded {total_frames} frames. Ready to visualize.")
     plt.show()
 
 if __name__ == "__main__":
-    visualize_interactive()
+    visualize()

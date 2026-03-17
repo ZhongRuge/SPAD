@@ -12,15 +12,15 @@ sensor:
 
 # 2. 仿真运行参数 (Simulation Control)
 simulation:
-  total_frames: 10000   # 仿真总帧数
+  total_frames: 5000    # 仿真总帧数
   batch_size: 1000      # 批处理帧数 (防止内存溢出)
   random_seed: 42       # 随机种子，保证每次生成同样的数据对比不同算法
 
 # 3. 场景与光学参数 (Scene & Optics)
 # 决定了空间相关性和时间相关性
 scene:
-  type: "uniform_poisson" # 场景类型 (测试差分编码的关键)
-  background_cps: 500   # 背景光强度 (每像素每秒到达的光子数，测试 AER 的抗压能力)
+  type: "uniform_poisson" # 场景类型 uniform_poisson | moving_circle
+  background_cps: 500   # 背景光强度 (每像素每秒到达的光子数，泊松期望是 background_cps/fps = background_cps / 250,000)
   signal_cps: 10000     # 目标光源强度 (高亮区域)
   target_radius: 20     # 发光目标的半径 (像素)
   velocity_pps: 5000    # 目标移动速度 (像素/秒，测试时间相关性)
