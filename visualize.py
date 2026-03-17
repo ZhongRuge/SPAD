@@ -9,6 +9,7 @@ def visualize():
     config = load_config()
     paths = resolve_output_paths(config)
     meta = read_metadata(paths["meta_path"])
+    # 可视化阶段直接整包读入，适合当前调研规模；超大数据集后续改为流式浏览。
     video_matrix = load_video_matrix(paths["data_path"], meta)
 
     width = meta["width"]
@@ -58,7 +59,7 @@ def visualize():
 
     def on_tick():
         if state['playing']:
-            state['curr_idx'] = (state['curr_idx'] + 5) % total_frames
+            state['curr_idx'] = (state['curr_idx'] + 10) % total_frames
             update_display()
 
     timer = fig.canvas.new_timer(interval=30)
