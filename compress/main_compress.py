@@ -4,9 +4,10 @@ from evaluator import CompressorEvaluator
 from algorithms import RleCompressor
 
 def main():
-    meta_path = "../data/spad_dataset.meta.json"
-    data_path = "../data/spad_dataset.bin"
-    output_path = "../data/rle_compressed.bin"
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    meta_path = os.path.join(current_dir, "../data/spad_dataset.meta.json")
+    data_path = os.path.join(current_dir, "../data/spad_dataset.bin")
+    output_path = os.path.join(current_dir, "../data/rle_compressed.bin")
 
     if not os.path.exists(meta_path) or not os.path.exists(data_path):
         print("找不到数据！请先回 data_generate 跑一下 main.py。")

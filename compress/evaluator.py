@@ -5,7 +5,7 @@ from base_compressor import BaseCompressor
 
 class CompressorEvaluator:
     """
-    压缩算法评估器 (裁判员)
+    压缩算法评估器
     负责统筹 IO 管理器和压缩算法，执行自动化测试，并输出性能报告。
     """
     def __init__(self, io_manager: SpadIOManager, compressor: BaseCompressor):
@@ -61,7 +61,7 @@ class CompressorEvaluator:
         print("\n========== 评估报告 ==========")
         print(f"算法名称: {self.compressor.algorithm_name}")
         print(f"数据无损校验: {'通过 (Lossless)' if is_lossless else '失败 (Lossy)'}")
-        print(f"基准数据体积: {total_original_bytes / 1024:.2f} KB (基于 1-bit 紧凑存储)")
+        print(f"基准数据体积: {total_original_bytes / 1024:.2f} KB")
         print(f"压缩后的体积: {total_compressed_bytes / 1024:.2f} KB")
         print(f"整体压缩比 (CR): {cr:.4f}x")
         print(f"总压缩耗时 (Encode): {total_encode_time:.4f} 秒")

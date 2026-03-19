@@ -8,7 +8,7 @@ class RleCompressor(BaseCompressor):
     """
     基础游程编码算法。
     核心思想：记录连续相同数字的长度。
-    例如：000001100 -> 记作 "5个0, 2个1, 2个0"
+    例如:000001100 -> 记作 "5个0, 2个1, 2个0"
     """
     
     def __init__(self):
@@ -23,12 +23,15 @@ class RleCompressor(BaseCompressor):
             
         # 利用 numpy 快速找到数字发生变化的位置 (比如从 0 变 1)
         # flat[:-1] != flat[1:] 会对比相邻元素是否不同
+        # change_idx 输出是位置变化的点比如[3, 5], 意为在位置为3、5的地方换了数字
         change_idx = np.where(flat[:-1] != flat[1:])[0] + 1
         
         # 在最前面加上起点 0，在最后面加上终点 flat.size
+        # change_idx 此时变成[0, 3, 5, 9] 0是起点, 9是总长
         change_idx = np.concatenate(([0], change_idx, [flat.size]))
         
         # 计算每一段相同数字的长度 (后一个位置减去前一个位置)
+        # run_lengths [3, 2, 4]意思是3个相同(0), 2个相同(1), 4个相同(0)
         run_lengths = np.diff(change_idx)
         
         # 记录第一个数字是 0 还是 1 (只需占用 1 个字节)
@@ -41,7 +44,7 @@ class RleCompressor(BaseCompressor):
         return compressed_bytes
 
     def decode(self, compressed_bytes: bytes, batch_shape: tuple) -> np.ndarray:
-        """解压过程：根据长度交替生成 0 和 1，还原矩阵"""
+        """解压过程：根据长度交替生成 0 和 1, 还原矩阵"""
         if not compressed_bytes:
             return np.zeros(batch_shape, dtype=np.uint8)
             
@@ -58,4 +61,5 @@ class RleCompressor(BaseCompressor):
             
         # 根据长度重复这些数字，并重塑回原来的 3D 形状
         flat_decoded = np.repeat(values, run_lengths)
+
         return flat_decoded.reshape(batch_shape)

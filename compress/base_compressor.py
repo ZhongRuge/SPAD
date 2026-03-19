@@ -30,7 +30,7 @@ class BaseCompressor(ABC):
         【核心压缩方法】
         将传入的 0/1 矩阵压缩为二进制字节流。
         
-        :param batch_pixels: 形状为 (batch_size, height, width) 的 numpy 数组，dtype 为 uint8 (只有 0 和 1)
+        :param batch_pixels: 形状为 (batch_size, height, width) 的 numpy 数组, dtype 为 uint8 (只有 0 和 1)
         :return: 压缩后的纯字节流 (bytes)
         """
         pass
@@ -44,6 +44,6 @@ class BaseCompressor(ABC):
         
         :param compressed_bytes: 由 encode 方法生成的纯字节流
         :param batch_shape: 期望还原的矩阵形状，例如 (1000, 200, 200)
-        :return: 还原后的 numpy 数组，dtype 必须为 uint8，且只包含 0 和 1
+        :return: 还原后的 numpy 数组, dtype 必须为 uint8, 且只包含 0 和 1
         """
         pass
