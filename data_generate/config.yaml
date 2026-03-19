@@ -8,7 +8,8 @@ sensor:
   height: 200           # 阵列高度
   fps: 250000           # 帧率 (250k fps，每帧曝光时间约 4us)
   pde: 1                # 光子探测效率 (0-1)
-  dead_time_ns: 50      # 死区时间 (纳秒，影响高光饱和情况)
+  # !!!死区时间 还没写逻辑
+  dead_time_ns: 50
 
 # 仿真运行参数 (Simulation Control)
 simulation:
@@ -19,15 +20,15 @@ simulation:
 # 场景与光学参数 (Scene & Optics)
 # 决定了空间相关性和时间相关性
 scene:
-  type: "uniform_poisson" # 场景类型 uniform_poisson | moving_circle
-  background_cps: 50    # 背景光(噪声)强度 (每像素每秒到达的光子数，泊松期望是 background_cps/fps = background_cps / 250,000)
-  signal_cps: 10000     # 目标光源强度 (高亮区域)
+  type: "moving_circle" # 场景类型 uniform_poisson | moving_circle
+  background_cps: 20    # 背景光(噪声)强度 (每像素每秒到达的光子数，泊松期望是 background_cps/fps = background_cps / 250,000)
+  signal_cps: 5000      # 目标光源强度 (高亮区域)
   target_radius: 20     # 发光目标的半径 (像素)
   velocity_pps: 5000    # 目标移动速度 (像素/秒，测试时间相关性)
 
 # 传感器内部噪声 (Internal Non-idealities)
 noise:
-  dcr_cps: 50           # 暗计数率 (每个像素每秒产生的热噪声)
+  dcr_cps: 20           # 暗计数率 (每个像素每秒产生的热噪声)
   crosstalk_orthogonal_prob: 0.0044 # 上下左右单个邻域的瞬时串扰率，按公开文献中最近邻/对角邻域约 7.3:1 的量级粗略折算
   crosstalk_diagonal_prob: 0.0006   # 四个角单个邻域的瞬时串扰率；8 邻域合计约为 2%
   afterpulsing_prob: 0.01 # 后脉冲概率 (1%，破坏时间独立性)

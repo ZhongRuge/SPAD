@@ -1,7 +1,7 @@
 import os
 from io_manager import SpadIOManager
 from evaluator import CompressorEvaluator
-from algorithms import RleCompressor
+from algorithms import AerCompressor, RleCompressor, DeltaRleCompressor, DeltaSparseCompressor, DeltaSparseZlibCompressor
 
 def main():
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -17,11 +17,22 @@ def main():
     io_manager = SpadIOManager(meta_path, data_path)
     
     # 挑选算法
-    my_algorithm = RleCompressor()
+    algorithms_to_test = [
+        RleCompressor(),
+        DeltaRleCompressor(),
+        DeltaSparseCompressor(),
+        DeltaSparseZlibCompressor(),
+        AerCompressor(use_delta=False)
+    ]
     
-    # 开始评估
-    evaluator = CompressorEvaluator(io_manager, my_algorithm)
-    evaluator.run_evaluation(output_path)
+    # 评估
+    for my_algorithm in algorithms_to_test:
+        file_name = f"{my_algorithm.__class__.__name__}_compressed.bin"
+        output_path = os.path.join(current_dir, f"../data/{file_name}")
+        
+        # 实例化并开始测试
+        evaluator = CompressorEvaluator(io_manager, my_algorithm)
+        evaluator.run_evaluation(output_path)
 
 if __name__ == "__main__":
     main()
