@@ -21,9 +21,10 @@ class CompressorEvaluator:
         total_original_bytes = 0
         total_compressed_bytes = 0
         is_lossless = True
+        batch_size = 1000
 
         # 按批次读取纯 0/1 的像素矩阵
-        for batch_pixels in self.io.stream_batches(batch_size=1000):
+        for batch_pixels in self.io.stream_batches(batch_size=batch_size):
             batch_shape = batch_pixels.shape
             
             # 记录理论上的原始体积
@@ -41,19 +42,27 @@ class CompressorEvaluator:
             total_compressed_bytes += len(compressed_bytes)
             
             # 写入磁盘
-            self.io.append_compressed_bytes(output_path, compressed_bytes)
+            self.io.append_compressed_chunk(output_path, compressed_bytes)
 
-            # 测试解压并校验数据完整性
+
+        raw_stream = self.io.stream_batches(batch_size=batch_size)
+        
+        # 使用流式生成器，从硬盘里把一个个压缩块(Chunk)抠出来
+        chunk_stream = self.io.stream_compressed_chunks(output_path)
+
+        for batch_idx, (raw_pixels, compressed_chunk) in enumerate(zip(raw_stream, chunk_stream)):
+            batch_shape = raw_pixels.shape
+
+            # 测试解压并计时
             start_time = time.time()
-            decoded_pixels = self.compressor.decode(compressed_bytes, batch_shape)
+            decoded_pixels = self.compressor.decode(compressed_chunk, batch_shape)
             decode_time = time.time() - start_time
             total_decode_time += decode_time
 
-            # 无损验证：对比解压后的矩阵和刚读进来的矩阵是否一模一样
-            if not np.array_equal(batch_pixels, decoded_pixels):
+            # 无损验证对比解压后的矩阵和原矩阵是否一样
+            if not np.array_equal(raw_pixels, decoded_pixels):
                 is_lossless = False
-                print("解压后的数据与原始数据不一致！")
-                break
+                print(f"第 {batch_idx + 1} 批次解压数据与原始数据不匹配！(如果是时域累加算法，属正常现象)")
 
         # 计算并打印评估报告
         cr = total_original_bytes / total_compressed_bytes if total_compressed_bytes > 0 else 0

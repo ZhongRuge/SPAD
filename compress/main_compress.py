@@ -1,7 +1,7 @@
 import os
 from io_manager import SpadIOManager
 from evaluator import CompressorEvaluator
-from algorithms import AerCompressor, RleCompressor, DeltaRleCompressor, DeltaSparseCompressor, DeltaSparseZlibCompressor
+from algorithms import AerCompressor, RleCompressor, DeltaRleCompressor, DeltaSparseCompressor, DeltaSparseZlibCompressor, TemporalBinningCompressor
 
 def main():
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,7 +22,8 @@ def main():
         DeltaRleCompressor(),
         DeltaSparseCompressor(),
         DeltaSparseZlibCompressor(),
-        AerCompressor(use_delta=False)
+        AerCompressor(use_delta=False),  # use_delta=False: 记录所有到来的光子 (标准 SPAD 模式)
+        TemporalBinningCompressor()      # use_delta=True:  只记录发生变化的像素 (标准 DVS 仿生视觉模式)
     ]
     
     # 评估

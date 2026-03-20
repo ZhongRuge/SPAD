@@ -295,3 +295,76 @@ class AerCompressor(BaseCompressor):
             matrix = np.bitwise_xor.accumulate(matrix, axis=0)
 
         return matrix
+    
+
+# ==========================================
+# 算法 6: 时域累加 + 熵编码 (Temporal Binning + Zlib)
+# ==========================================
+class TemporalBinningCompressor(BaseCompressor):
+    """
+    注意：这是一种时间维度的“有损”压缩！
+
+    片上直方图/时域累加架构。
+    将连续的 N 帧二值图像，在时间轴上相加，输出 8-bit 灰度图像。
+    然后再使用 Zlib 模拟常规的无损图像/视频内插压缩。
+    """
+    def __init__(self, bin_size=255):
+        super().__init__()
+        # 默认累加 255 帧，因为 255 刚好是 8-bit (uint8) 的最大值，完美契合字节边界
+        self.bin_size = bin_size
+
+    @property
+    def algorithm_name(self) -> str:
+        return f"时域累加(Binning={self.bin_size})+Zlib"
+
+    def encode(self, batch_pixels: np.ndarray) -> bytes:
+        T, Y, X = batch_pixels.shape
+        
+        # 计算当前 batch 能切成多少个完整的累加块
+        num_bins = int(np.ceil(T / self.bin_size))
+        binned_frames = []
+        
+        # 模拟芯片上的累加器 (Accumulator)
+        for i in range(num_bins):
+            start = i * self.bin_size
+            end = min((i + 1) * self.bin_size, T)
+            
+            # 切出这几百帧，然后顺着时间轴 (axis=0) 全部加起来
+            chunk = batch_pixels[start:end]
+            binned_frame = np.sum(chunk, axis=0, dtype=np.uint8)
+            binned_frames.append(binned_frame)
+            
+        # 合并成一块 8-bit 的灰度视频矩阵
+        binned_array = np.array(binned_frames, dtype=np.uint8)
+        
+        # 调用 Zlib 榨干由于画面大面积黑色带来的空间冗余 (类似 PNG 压缩)
+        compressed_bytes = zlib.compress(binned_array.tobytes(), level=9)
+        
+        # 写入 2 个字节的头部，记录到底压成了几帧灰度图，方便解压时使用
+        shape_header = np.array([len(binned_frames)], dtype=np.uint16).tobytes()
+        
+        return shape_header + compressed_bytes
+
+    def decode(self, compressed_bytes: bytes, batch_shape: tuple) -> np.ndarray:
+        # 时域累加是不可逆的！这里只能做 伪还原
+        if not compressed_bytes:
+            return np.zeros(batch_shape, dtype=np.uint8)
+            
+        # 读取头部和压缩数据
+        num_bins = int(np.frombuffer(compressed_bytes[:2], dtype=np.uint16)[0])
+        zlib_data = compressed_bytes[2:]
+        
+        # 解压出 8-bit 灰度图
+        raw_bytes = zlib.decompress(zlib_data)
+        _, Y, X = batch_shape
+        binned_array = np.frombuffer(raw_bytes, dtype=np.uint8).reshape((num_bins, Y, X))
+        
+        # 伪还原：把 8-bit 灰度图的非零像素，粗暴地塞回这 255 帧里的“第一帧”
+        # 这必然会导致与原数据完全不同，但能保持矩阵形状不崩溃
+        reconstructed = np.zeros(batch_shape, dtype=np.uint8)
+        for i in range(num_bins):
+            start = i * self.bin_size
+            # 只要这个像素累加值大于 0，我们就假装第一帧亮了
+            reconstructed[start] = (binned_array[i] > 0).astype(np.uint8)
+            
+        return reconstructed

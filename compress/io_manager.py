@@ -1,6 +1,7 @@
 import json
 import numpy as np
 import os
+import struct
 
 class SpadIOManager:
     """
@@ -74,3 +75,26 @@ class SpadIOManager:
     def get_original_size_bytes(self):
         """获取原始二进制文件的大小"""
         return os.path.getsize(self.data_path)
+    
+    
+
+    def append_compressed_chunk(self, output_path, compressed_bytes):
+        """写入数据块时，先用 4 字节(uint32)记录这个块的长度"""
+        chunk_size = len(compressed_bytes)
+        with open(output_path, "ab") as f:
+            f.write(struct.pack("<I", chunk_size)) 
+            f.write(compressed_bytes)
+
+    def stream_compressed_chunks(self, output_path):
+        """从磁盘流式读取压缩数据，严格依靠 Chunk Size 拆分"""
+        with open(output_path, "rb") as f:
+            while True:
+                # 先读 4 字节的头部，知道接下来要读多长
+                size_bytes = f.read(4)
+                if not size_bytes:
+                    break
+                chunk_size = struct.unpack("<I", size_bytes)[0]
+                
+                # 精确读取这个 Batch 的数据
+                compressed_bytes = f.read(chunk_size)
+                yield compressed_bytes
