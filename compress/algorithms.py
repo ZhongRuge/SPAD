@@ -1,5 +1,33 @@
 import numpy as np
 from base_compressor import BaseCompressor
+import zlib
+
+
+UINT16_MAX = np.iinfo(np.uint16).max
+UINT8_MAX = np.iinfo(np.uint8).max
+
+
+def _validate_sparse_index_capacity(batch_pixels: np.ndarray):
+    pixels_per_frame = batch_pixels.shape[1] * batch_pixels.shape[2]
+    if pixels_per_frame > UINT16_MAX:
+        raise ValueError(
+            "DeltaSparseCompressor 当前使用 uint16 存储像素索引，"
+            f"单帧像素数 {pixels_per_frame} 超出上限 {UINT16_MAX}"
+        )
+
+
+def _validate_aer_capacity(shape: tuple):
+    frames, height, width = shape
+    if frames - 1 > UINT16_MAX:
+        raise ValueError(
+            "AerCompressor 当前使用 16-bit 时间戳，"
+            f"batch 帧数 {frames} 超出可编码范围 {UINT16_MAX + 1}"
+        )
+    if height - 1 > UINT8_MAX or width - 1 > UINT8_MAX:
+        raise ValueError(
+            "AerCompressor 当前使用 8-bit X/Y 坐标，"
+            f"输入尺寸 {height}x{width} 超出可编码范围 256x256"
+        )
 
 # ==========================================
 # 游程编码 (Run-Length Encoding, RLE)
@@ -51,6 +79,8 @@ class RleCompressor(BaseCompressor):
         """解压过程：根据长度交替生成 0 和 1, 还原矩阵"""
         if not compressed_bytes:
             return np.zeros(batch_shape, dtype=np.uint8)
+        if (len(compressed_bytes) - 1) % 4 != 0:
+            raise ValueError("RLE 压缩流格式错误: run-length 字节数不是 uint32 的整数倍")
             
         # 拆解字节流：第 1 个字节是初始值，后面全是 4 字节的长度数据
         first_val = np.frombuffer(compressed_bytes[:1], dtype=np.uint8)[0]
@@ -65,6 +95,12 @@ class RleCompressor(BaseCompressor):
             
         # 根据长度重复这些数字，并重塑回原来的 3D 形状
         flat_decoded = np.repeat(values, run_lengths)
+
+        expected_pixels = int(np.prod(batch_shape, dtype=np.int64))
+        if flat_decoded.size != expected_pixels:
+            raise ValueError(
+                f"RLE 解码像素数不匹配: expected={expected_pixels}, actual={flat_decoded.size}"
+            )
 
         return flat_decoded.reshape(batch_shape)
 
@@ -107,6 +143,8 @@ class DeltaRleCompressor(BaseCompressor):
     def decode(self, compressed_bytes: bytes, batch_shape: tuple) -> np.ndarray:
         if not compressed_bytes:
             return np.zeros(batch_shape, dtype=np.uint8)
+        if (len(compressed_bytes) - 1) % 4 != 0:
+            raise ValueError("DeltaRLE 压缩流格式错误: run-length 字节数不是 uint32 的整数倍")
             
         # RLE 解压出差分矩阵
         first_val = np.frombuffer(compressed_bytes[:1], dtype=np.uint8)[0]
@@ -119,6 +157,11 @@ class DeltaRleCompressor(BaseCompressor):
             values[1::2] = 1
             
         flat_decoded = np.repeat(values, run_lengths)
+        expected_pixels = int(np.prod(batch_shape, dtype=np.int64))
+        if flat_decoded.size != expected_pixels:
+            raise ValueError(
+                f"DeltaRLE 解码像素数不匹配: expected={expected_pixels}, actual={flat_decoded.size}"
+            )
         delta_pixels = flat_decoded.reshape(batch_shape)
         
         # 累积异或 (Cumulative XOR) 还原原始帧
@@ -144,6 +187,8 @@ class DeltaSparseCompressor(BaseCompressor):
         return "帧间差分+点记录 (Delta+Sparse)"
 
     def encode(self, batch_pixels: np.ndarray) -> bytes:
+        _validate_sparse_index_capacity(batch_pixels)
+
         # 计算帧间差分 (XOR)
         delta_pixels = np.zeros_like(batch_pixels)
         delta_pixels[0] = batch_pixels[0]
@@ -179,24 +224,29 @@ class DeltaSparseCompressor(BaseCompressor):
         # 逐帧还原差分矩阵
         for i in range(total_frames):
             # 先读 2 个字节，看看这帧有几个变化点
+            if offset + 2 > len(compressed_bytes):
+                raise ValueError("DeltaSparse 压缩流格式错误: 缺少 count 字段")
             count = int(np.frombuffer(compressed_bytes[offset:offset+2], dtype=np.uint16)[0])
             offset += 2
             
             if count > 0:
                 # 根据数量，往后读取对应长度的坐标数据 (每个坐标 2 字节)
                 bytes_to_read = count * 2
+                if offset + bytes_to_read > len(compressed_bytes):
+                    raise ValueError("DeltaSparse 压缩流格式错误: 坐标数据长度不足")
                 indices = np.frombuffer(compressed_bytes[offset:offset+bytes_to_read], dtype=np.uint16)
                 offset += bytes_to_read
                 
                 # 按照坐标，把画布上的对应像素点亮
                 delta_pixels[i].ravel()[indices] = 1
+
+        if offset != len(compressed_bytes):
+            raise ValueError("DeltaSparse 压缩流格式错误: 存在未消费的尾部字节")
                 
         # 累积异或还原原始帧
         reconstructed = np.bitwise_xor.accumulate(delta_pixels, axis=0)
         return reconstructed
     
-
-import zlib
 # ==========================================
 # 帧间差分 + 点记录 + 熵编码
 # ==========================================
@@ -251,6 +301,8 @@ class AerCompressor(BaseCompressor):
         return f"事件地址表示法 AER ({mode})"
 
     def encode(self, batch_pixels: np.ndarray) -> bytes:
+        _validate_aer_capacity(batch_pixels.shape)
+
         # 判断是否要进行帧间差分提取变化点
         if self.use_delta:
             data_to_encode = np.zeros_like(batch_pixels)
@@ -274,9 +326,13 @@ class AerCompressor(BaseCompressor):
         return aer_events.tobytes()
 
     def decode(self, compressed_bytes: bytes, batch_shape: tuple) -> np.ndarray:
+        _validate_aer_capacity(batch_shape)
+
         matrix = np.zeros(batch_shape, dtype=np.uint8)
         if not compressed_bytes:
             return matrix
+        if len(compressed_bytes) % 4 != 0:
+            raise ValueError("AER 压缩流格式错误: 事件流字节数不是 uint32 的整数倍")
 
         # 直接以 uint32 读取所有事件包
         aer_events = np.frombuffer(compressed_bytes, dtype=np.uint32)
@@ -311,11 +367,19 @@ class TemporalBinningCompressor(BaseCompressor):
     def __init__(self, bin_size=255):
         super().__init__()
         # 默认累加 255 帧，因为 255 刚好是 8-bit (uint8) 的最大值，完美契合字节边界
+        if not isinstance(bin_size, int) or bin_size <= 0:
+            raise ValueError("TemporalBinningCompressor.bin_size 必须为正整数")
+        if bin_size > UINT8_MAX:
+            raise ValueError("TemporalBinningCompressor.bin_size 不能超过 255，否则 uint8 会溢出")
         self.bin_size = bin_size
 
     @property
     def algorithm_name(self) -> str:
         return f"时域累加(Binning={self.bin_size})+Zlib"
+
+    @property
+    def is_lossless(self) -> bool:
+        return False
 
     def encode(self, batch_pixels: np.ndarray) -> bytes:
         T, Y, X = batch_pixels.shape
@@ -349,6 +413,8 @@ class TemporalBinningCompressor(BaseCompressor):
         # 时域累加是不可逆的！这里只能做 伪还原
         if not compressed_bytes:
             return np.zeros(batch_shape, dtype=np.uint8)
+        if len(compressed_bytes) < 2:
+            raise ValueError("TemporalBinning 压缩流格式错误: 缺少 bin 数量头部")
             
         # 读取头部和压缩数据
         num_bins = int(np.frombuffer(compressed_bytes[:2], dtype=np.uint16)[0])
@@ -357,6 +423,11 @@ class TemporalBinningCompressor(BaseCompressor):
         # 解压出 8-bit 灰度图
         raw_bytes = zlib.decompress(zlib_data)
         _, Y, X = batch_shape
+        expected_bytes = num_bins * Y * X
+        if len(raw_bytes) != expected_bytes:
+            raise ValueError(
+                f"TemporalBinning 解码尺寸不匹配: expected={expected_bytes}, actual={len(raw_bytes)}"
+            )
         binned_array = np.frombuffer(raw_bytes, dtype=np.uint8).reshape((num_bins, Y, X))
         
         # 伪还原：把 8-bit 灰度图的非零像素，粗暴地塞回这 255 帧里的“第一帧”

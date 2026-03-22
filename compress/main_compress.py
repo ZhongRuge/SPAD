@@ -22,8 +22,8 @@ def main():
         DeltaRleCompressor(),
         DeltaSparseCompressor(),
         DeltaSparseZlibCompressor(),
-        AerCompressor(use_delta=False),  # use_delta=False: 记录所有到来的光子 (标准 SPAD 模式)
-        TemporalBinningCompressor()      # use_delta=True:  只记录发生变化的像素 (标准 DVS 仿生视觉模式)
+        AerCompressor(use_delta=False),  # use_delta=False: 记录所有到来的光子 (标准 SPAD 模式)  use_delta=True:  只记录发生变化的像素 (标准 DVS 仿生视觉模式)
+        TemporalBinningCompressor()      
     ]
     
     # 评估

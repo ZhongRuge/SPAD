@@ -37,7 +37,6 @@ def visualize():
     io_manager = SpadIOManager(meta_path, data_path)
     width = io_manager.width
     height = io_manager.height
-    batch_size = 1000
 
     print(f"正在解码 {my_algorithm.algorithm_name} 的数据")
     
@@ -45,9 +44,8 @@ def visualize():
     video_matrix_list = []
     chunk_stream = io_manager.stream_compressed_chunks(compressed_path)
     
-    for chunk in chunk_stream:
-        # 如果是最后一块，可能不足 1000 帧，但为了简便，decode 内部依靠 chunk 还原
-        decoded_batch = my_algorithm.decode(chunk, (batch_size, height, width))
+    for frame_count, chunk in chunk_stream:
+        decoded_batch = my_algorithm.decode(chunk, (frame_count, height, width))
         video_matrix_list.append(decoded_batch)
         
     video_matrix = np.concatenate(video_matrix_list, axis=0)

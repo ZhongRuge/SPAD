@@ -47,6 +47,14 @@ def validate_config(config):
     if float(simulation["total_seconds"]) <= 0:
         raise ValueError("simulation.total_seconds 必须大于 0")
 
+    total_frame_count = float(simulation["total_seconds"]) * int(sensor["fps"])
+    rounded_total_frames = round(total_frame_count)
+    if not math.isclose(total_frame_count, rounded_total_frames, rel_tol=0.0, abs_tol=1e-9):
+        raise ValueError(
+            "simulation.total_seconds * sensor.fps 必须对应整数帧数，"
+            f"当前得到 {total_frame_count}"
+        )
+
     if scene["type"] not in {"uniform_poisson", "moving_circle"}:
         raise ValueError("scene.type 仅支持 uniform_poisson 或 moving_circle")
 
@@ -73,9 +81,12 @@ def validate_config(config):
     if not str(io_config["filename"]).strip():
         raise ValueError("io.filename 不能为空")
 
+    resolve_save_as_bits(io_config)
+
 
 def _require_positive_int(value, field_name):
-    if int(value) <= 0:
+    numeric_value = float(value)
+    if not numeric_value.is_integer() or int(numeric_value) <= 0:
         raise ValueError(f"{field_name} 必须为正整数")
 
 
@@ -88,6 +99,14 @@ def _require_probability(value, field_name):
     probability = float(value)
     if probability < 0 or probability > 1:
         raise ValueError(f"{field_name} 必须在 [0, 1] 区间内")
+
+
+def resolve_save_as_bits(io_config):
+    save_as_bits = io_config.get("save_as_bits", True)
+    if isinstance(save_as_bits, bool):
+        return save_as_bits
+
+    raise ValueError("io.save_as_bits 必须为布尔值 true 或 false")
 
 
 def resolve_crosstalk_probabilities(noise_config):
@@ -130,7 +149,7 @@ def resolve_total_frames(config):
     fps = int(config["sensor"]["fps"])
 
     # 帧率固定时，所有数据规模统一由仿真时长决定，避免同时维护 seconds / frames 两套入口。
-    return int(total_seconds * fps)
+    return int(round(total_seconds * fps))
 
 
 def resolve_output_paths(config):
@@ -154,9 +173,10 @@ def resolve_output_paths(config):
 
 
 def build_metadata(config, total_frames, seed, paths):
-    save_as_bits = bool(config["io"].get("save_as_bits", True))
+    save_as_bits = resolve_save_as_bits(config["io"])
     has_ground_truth = scene_has_ground_truth(config["scene"]["type"])
     crosstalk = resolve_crosstalk_probabilities(config.get("noise", {}))
+    pixels_per_frame = int(config["sensor"]["width"]) * int(config["sensor"]["height"])
     return {
         "width": int(config["sensor"]["width"]),
         "height": int(config["sensor"]["height"]),
@@ -166,7 +186,7 @@ def build_metadata(config, total_frames, seed, paths):
         "storage_dtype": "uint8",
         "save_as_bits": save_as_bits,
         "storage_order": "frame-major: 统一按 frame-major 顺序写盘，便于后续压缩算法直接流式读取",
-        "bit_packing": "numpy.packbits" if save_as_bits else None,
+        "bit_packing": "per-frame numpy.packbits over flattened pixels" if save_as_bits else None,
         "seed": int(seed),
         "scene_type": config["scene"]["type"],
         "has_ground_truth": has_ground_truth,
@@ -188,6 +208,8 @@ def build_metadata(config, total_frames, seed, paths):
             "crosstalk_ratio_source": crosstalk["ratio_source"],
             "afterpulsing_prob": float(config.get("noise", {}).get("afterpulsing_prob", 0.0)),
         },
+        "pixels_per_frame": pixels_per_frame,
+        "bytes_per_frame": math.ceil(pixels_per_frame / 8) if save_as_bits else pixels_per_frame,
         "ground_truth_filename": os.path.basename(paths["ground_truth_path"]) if has_ground_truth else None,
     }
 
@@ -207,7 +229,8 @@ def write_video_batch(file_obj, frame_batch, save_as_bits):
         frame_batch = frame_batch.astype(np.uint8)
 
     if save_as_bits:
-        payload = np.packbits(frame_batch.reshape(-1))
+        flattened_frames = frame_batch.reshape(frame_batch.shape[0], -1)
+        payload = np.packbits(flattened_frames, axis=1).reshape(-1)
     else:
         payload = frame_batch.reshape(-1)
 
@@ -227,10 +250,10 @@ def read_metadata(meta_path):
 
 
 def expected_storage_bytes(metadata):
-    total_pixels = metadata["width"] * metadata["height"] * metadata["total_frames"]
+    pixels_per_frame = metadata["width"] * metadata["height"]
     if metadata.get("save_as_bits", True):
-        return math.ceil(total_pixels / 8)
-    return total_pixels
+        return metadata["total_frames"] * math.ceil(pixels_per_frame / 8)
+    return metadata["total_frames"] * pixels_per_frame
 
 
 def load_video_matrix(data_path, metadata):
@@ -242,10 +265,15 @@ def load_video_matrix(data_path, metadata):
             f"数据文件大小与元数据不一致: expected={expected_bytes} bytes, actual={raw_data.size} bytes"
         )
 
-    total_pixels = metadata["width"] * metadata["height"] * metadata["total_frames"]
+    total_frames = metadata["total_frames"]
+    height = metadata["height"]
+    width = metadata["width"]
+    pixels_per_frame = width * height
     if metadata.get("save_as_bits", True):
-        decoded = np.unpackbits(raw_data)[:total_pixels]
+        bytes_per_frame = math.ceil(pixels_per_frame / 8)
+        framed_bytes = raw_data.reshape((total_frames, bytes_per_frame))
+        decoded = np.unpackbits(framed_bytes, axis=1)[:, :pixels_per_frame]
     else:
-        decoded = raw_data
+        decoded = raw_data.reshape((total_frames, pixels_per_frame))
 
-    return decoded.reshape((metadata["total_frames"], metadata["height"], metadata["width"]))
+    return decoded.reshape((total_frames, height, width))

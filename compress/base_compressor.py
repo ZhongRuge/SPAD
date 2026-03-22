@@ -24,6 +24,14 @@ class BaseCompressor(ABC):
         """
         return self.__class__.__name__
 
+    @property
+    def is_lossless(self) -> bool:
+        """
+        标记该算法是否设计为无损压缩。
+        评估器据此决定是否执行逐像素一致性校验。
+        """
+        return True
+
     @abstractmethod
     def encode(self, batch_pixels: np.ndarray) -> bytes:
         """

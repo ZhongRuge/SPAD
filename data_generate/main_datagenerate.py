@@ -9,6 +9,7 @@ from simulation_io import append_ground_truth
 from simulation_io import build_metadata
 from simulation_io import load_config
 from simulation_io import resolve_output_paths
+from simulation_io import resolve_save_as_bits
 from simulation_io import resolve_total_frames
 from simulation_io import scene_has_ground_truth
 from simulation_io import write_metadata
@@ -19,7 +20,7 @@ def run_simulation():
     total_frames = resolve_total_frames(config)
     batch_size = int(config["simulation"]["batch_size"])
     seed = int(config["simulation"].get("random_seed", random.randint(0, 1_000_000)))
-    save_as_bits = bool(config["io"].get("save_as_bits", True))
+    save_as_bits = resolve_save_as_bits(config["io"])
     paths = resolve_output_paths(config)
 
     seed_sequence = np.random.SeedSequence(seed)
@@ -31,7 +32,6 @@ def run_simulation():
     noise_injector = NoiseInjector(config, noise_rng)
 
     metadata = build_metadata(config, total_frames, seed, paths)
-    write_metadata(paths["meta_path"], metadata)
     has_ground_truth = scene_has_ground_truth(config["scene"]["type"])
 
     print(
@@ -42,6 +42,8 @@ def run_simulation():
 
     if not has_ground_truth and os.path.exists(paths["ground_truth_path"]):
         os.remove(paths["ground_truth_path"])
+    if os.path.exists(paths["meta_path"]):
+        os.remove(paths["meta_path"])
 
     gt_context = (
         open(paths["ground_truth_path"], "w", encoding="utf-8")
@@ -65,6 +67,8 @@ def run_simulation():
 
             processed_frames = start_frame + current_batch_size
             print(f"已处理 {processed_frames} / {total_frames} 帧")
+
+    write_metadata(paths["meta_path"], metadata)
 
     file_size_mb = os.path.getsize(paths["data_path"]) / (1024 * 1024)
     print(

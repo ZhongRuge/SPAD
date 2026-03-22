@@ -1,4 +1,5 @@
 import json
+import math
 import numpy as np
 import os
 import struct
@@ -23,11 +24,13 @@ class SpadIOManager:
         self.height = self.meta["height"]
         self.total_frames = self.meta["total_frames"]
         self.save_as_bits = self.meta.get("save_as_bits", True)
+        self.chunk_header_format = "<II"
+        self.chunk_header_size = struct.calcsize(self.chunk_header_format)
         
         # 计算单帧物理大小
         self.pixels_per_frame = self.width * self.height
         if self.save_as_bits:
-            self.bytes_per_frame = self.pixels_per_frame // 8
+            self.bytes_per_frame = math.ceil(self.pixels_per_frame / 8)
         else:
             self.bytes_per_frame = self.pixels_per_frame
 
@@ -49,15 +52,20 @@ class SpadIOManager:
                 raw_bytes = f.read(read_bytes)
                 if not raw_bytes:
                     break
+                if len(raw_bytes) != read_bytes:
+                    raise ValueError(
+                        f"数据文件被截断: 期望读取 {read_bytes} 字节，实际只读到 {len(raw_bytes)} 字节"
+                    )
                     
                 # 将字节流转换为一维 numpy 数组
                 raw_array = np.frombuffer(raw_bytes, dtype=np.uint8)
                 
                 # 如果是位打包存储，自动解包为 0 和 1
                 if self.save_as_bits:
-                    batch_pixels = np.unpackbits(raw_array)
+                    framed_bytes = raw_array.reshape((current_batch_size, self.bytes_per_frame))
+                    batch_pixels = np.unpackbits(framed_bytes, axis=1)[:, :self.pixels_per_frame]
                 else:
-                    batch_pixels = raw_array
+                    batch_pixels = raw_array.reshape((current_batch_size, self.pixels_per_frame))
                     
                 # 重塑为三维张量 (帧数, 高, 宽)，直接交给算法层
                 yield batch_pixels.reshape((current_batch_size, self.height, self.width))
@@ -78,23 +86,32 @@ class SpadIOManager:
     
     
 
-    def append_compressed_chunk(self, output_path, compressed_bytes):
-        """写入数据块时，先用 4 字节(uint32)记录这个块的长度"""
+    def append_compressed_chunk(self, output_path, compressed_bytes, frame_count):
+        """写入数据块时，记录块长度和该块对应的帧数。"""
         chunk_size = len(compressed_bytes)
         with open(output_path, "ab") as f:
-            f.write(struct.pack("<I", chunk_size)) 
+            f.write(struct.pack(self.chunk_header_format, chunk_size, int(frame_count)))
             f.write(compressed_bytes)
 
     def stream_compressed_chunks(self, output_path):
-        """从磁盘流式读取压缩数据，严格依靠 Chunk Size 拆分"""
+        """从磁盘流式读取压缩数据，严格依靠头部中的块长度和帧数拆分。"""
         with open(output_path, "rb") as f:
             while True:
-                # 先读 4 字节的头部，知道接下来要读多长
-                size_bytes = f.read(4)
-                if not size_bytes:
+                header_bytes = f.read(self.chunk_header_size)
+                if not header_bytes:
                     break
-                chunk_size = struct.unpack("<I", size_bytes)[0]
+                if len(header_bytes) != self.chunk_header_size:
+                    raise ValueError("压缩文件头部不完整，无法解析 chunk 信息")
+
+                chunk_size, frame_count = struct.unpack(self.chunk_header_format, header_bytes)
                 
-                # 精确读取这个 Batch 的数据
                 compressed_bytes = f.read(chunk_size)
-                yield compressed_bytes
+                if len(compressed_bytes) != chunk_size:
+                    raise ValueError(
+                        f"压缩文件被截断: 期望读取 {chunk_size} 字节，实际只读到 {len(compressed_bytes)} 字节"
+                    )
+
+                yield frame_count, compressed_bytes
+
+    def get_batch_shape(self, frame_count):
+        return (int(frame_count), self.height, self.width)
