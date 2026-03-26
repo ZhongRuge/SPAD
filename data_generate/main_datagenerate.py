@@ -9,6 +9,7 @@ from simulation_io import append_ground_truth
 from simulation_io import build_metadata
 from simulation_io import load_config
 from simulation_io import resolve_output_paths
+from simulation_io import resolve_runtime_batch_size
 from simulation_io import resolve_save_as_bits
 from simulation_io import resolve_total_frames
 from simulation_io import scene_has_ground_truth
@@ -18,7 +19,7 @@ from simulation_io import write_video_batch
 def run_simulation():
     config = load_config()
     total_frames = resolve_total_frames(config)
-    batch_size = int(config["simulation"]["batch_size"])
+    batch_size = resolve_runtime_batch_size(config, "generate")
     seed = int(config["simulation"].get("random_seed", random.randint(0, 1_000_000)))
     save_as_bits = resolve_save_as_bits(config["io"])
     paths = resolve_output_paths(config)

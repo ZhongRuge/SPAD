@@ -8,6 +8,15 @@ import yaml
 
 
 SCENES_WITH_GROUND_TRUTH = {"moving_circle"}
+DEFAULT_ALGORITHMS = [
+    "rle",
+    "delta_rle",
+    "delta_sparse",
+    "delta_sparse_zlib",
+    "aer",
+    "temporal_binning",
+]
+DEFAULT_COMPRESSED_VISUALIZATION_ALGORITHM = "delta_sparse"
 REFERENCE_CROSSTALK_ORTHOGONAL = 1.1e-3 # 最近正交邻域的瞬时串扰率约为 1.1e-3
 REFERENCE_CROSSTALK_DIAGONAL = 1.5e-4 # 最近对角邻域的瞬时串扰率约为 1.5e-4
 
@@ -31,6 +40,10 @@ def validate_config(config):
     scene = config["scene"]
     noise = config.get("noise", {})
     io_config = config["io"]
+    runtime = config.get("runtime", {})
+    compression = config.get("compression", {})
+    evaluation = config.get("evaluation", {})
+    visualization = config.get("visualization", {})
 
     _require_positive_int(sensor["width"], "sensor.width")
     _require_positive_int(sensor["height"], "sensor.height")
@@ -82,6 +95,36 @@ def validate_config(config):
         raise ValueError("io.filename 不能为空")
 
     resolve_save_as_bits(io_config)
+
+
+    runtime_batch_size = runtime.get("batch_size", {})
+    if runtime_batch_size:
+        if not isinstance(runtime_batch_size, dict):
+            raise ValueError("runtime.batch_size must be a mapping")
+        for stage_name, batch_size in runtime_batch_size.items():
+            _require_positive_int(batch_size, f"runtime.batch_size.{stage_name}")
+
+    algorithms = compression.get("algorithms")
+    if algorithms is not None:
+        if not isinstance(algorithms, list) or not algorithms:
+            raise ValueError("compression.algorithms must be a non-empty list")
+        for algorithm_id in algorithms:
+            if not str(algorithm_id).strip():
+                raise ValueError("compression.algorithms cannot contain blank values")
+
+    algorithm_params = compression.get("algorithm_params", {})
+    if algorithm_params and not isinstance(algorithm_params, dict):
+        raise ValueError("compression.algorithm_params must be a mapping")
+
+    verify_lossless = evaluation.get("verify_lossless")
+    if verify_lossless is not None and not isinstance(verify_lossless, bool):
+        raise ValueError("evaluation.verify_lossless must be a boolean")
+
+    compressed_visualization = visualization.get("compressed", {})
+    if compressed_visualization:
+        algorithm_id = compressed_visualization.get("algorithm")
+        if algorithm_id is not None and not str(algorithm_id).strip():
+            raise ValueError("visualization.compressed.algorithm cannot be blank")
 
 
 def _require_positive_int(value, field_name):
@@ -152,14 +195,24 @@ def resolve_total_frames(config):
     return int(round(total_seconds * fps))
 
 
-def resolve_output_paths(config):
-    output_dir = Path(config["io"]["output_dir"])
-    if not output_dir.is_absolute():
-        output_dir = Path(config["_config_dir"]) / output_dir
+def _resolve_relative_dir(config, raw_dir):
+    path_obj = Path(raw_dir)
+    if not path_obj.is_absolute():
+        path_obj = Path(config["_config_dir"]) / path_obj
+    os.makedirs(path_obj, exist_ok=True)
+    return path_obj
 
-    filename = config["io"]["filename"]
-    os.makedirs(output_dir, exist_ok=True)
 
+def resolve_dataset_paths(config):
+    paths_config = config.get("paths", {})
+    dataset_config = paths_config.get("dataset", {})
+
+    output_dir = dataset_config.get("output_dir", config["io"]["output_dir"])
+    filename = dataset_config.get("filename", config["io"]["filename"])
+    if not str(filename).strip():
+        raise ValueError("dataset filename cannot be blank")
+
+    output_dir = _resolve_relative_dir(config, output_dir)
     data_path = os.path.join(str(output_dir), filename)
     base_name, _ = os.path.splitext(filename)
     meta_path = os.path.join(str(output_dir), f"{base_name}.meta.json")
@@ -170,6 +223,61 @@ def resolve_output_paths(config):
         "meta_path": meta_path,
         "ground_truth_path": ground_truth_path,
     }
+
+
+def resolve_output_paths(config):
+    return resolve_dataset_paths(config)
+
+
+def resolve_compression_output_dir(config):
+    paths_config = config.get("paths", {})
+    compression_paths = paths_config.get("compression", {})
+    output_dir = compression_paths.get("output_dir", config["io"]["output_dir"])
+    return str(_resolve_relative_dir(config, output_dir))
+
+
+def resolve_runtime_batch_size(config, stage):
+    runtime_batch_size = config.get("runtime", {}).get("batch_size", {})
+    if isinstance(runtime_batch_size, dict) and runtime_batch_size.get(stage) is not None:
+        return int(runtime_batch_size[stage])
+
+    if stage in {"generate", "compress"}:
+        return int(config["simulation"]["batch_size"])
+
+    raise ValueError(f"Unknown runtime stage: {stage}")
+
+
+def resolve_enabled_algorithms(config):
+    algorithms = config.get("compression", {}).get("algorithms")
+    if not algorithms:
+        return list(DEFAULT_ALGORITHMS)
+    return [str(algorithm_id).strip() for algorithm_id in algorithms]
+
+
+def resolve_algorithm_params(config, algorithm_id):
+    algorithm_params = config.get("compression", {}).get("algorithm_params", {})
+    params = algorithm_params.get(algorithm_id, {})
+    if params is None:
+        return {}
+    if not isinstance(params, dict):
+        raise ValueError(f"compression.algorithm_params.{algorithm_id} must be a mapping")
+    return dict(params)
+
+
+def resolve_evaluator_config(config):
+    evaluation = config.get("evaluation", {})
+    return {
+        "batch_size": resolve_runtime_batch_size(config, "compress"),
+        "verify_lossless": bool(evaluation.get("verify_lossless", True)),
+    }
+
+
+def resolve_visualization_algorithm(config):
+    visualization = config.get("visualization", {})
+    compressed = visualization.get("compressed", {})
+    return str(
+        compressed.get("algorithm", DEFAULT_COMPRESSED_VISUALIZATION_ALGORITHM)
+    ).strip()
 
 
 def build_metadata(config, total_frames, seed, paths):

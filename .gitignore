@@ -7,6 +7,7 @@
 # Keep this rule file tracked.
 !.gitignore
 
-# Only allow Python source and YAML config files.
+# Only allow Python source, binary dataset, and YAML config files.
 !*.py
+!*.bin
 !*.yaml

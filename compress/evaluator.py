@@ -9,9 +9,17 @@ class CompressorEvaluator:
     压缩算法评估器
     负责统筹 IO 管理器和压缩算法，执行自动化测试，并输出性能报告。
     """
-    def __init__(self, io_manager: SpadIOManager, compressor: BaseCompressor):
+    def __init__(
+        self,
+        io_manager: SpadIOManager,
+        compressor: BaseCompressor,
+        batch_size: int = 1000,
+        verify_lossless: bool = True,
+    ):
         self.io = io_manager
         self.compressor = compressor
+        self.batch_size = int(batch_size)
+        self.verify_lossless = bool(verify_lossless)
 
     def run_evaluation(self, output_path: str):
         print(f"\n========== 开始评估算法: {self.compressor.algorithm_name} ==========")
@@ -21,7 +29,7 @@ class CompressorEvaluator:
         total_decode_time = 0.0
         total_original_bytes = self.io.get_original_size_bytes()
         is_lossless = self.compressor.is_lossless
-        batch_size = 1000
+        batch_size = self.batch_size
 
         # 按批次读取纯 0/1 的像素矩阵
         for batch_pixels in self.io.stream_batches(batch_size=batch_size):
@@ -59,7 +67,7 @@ class CompressorEvaluator:
             total_decode_time += decode_time
 
             # 无损验证对比解压后的矩阵和原矩阵是否一样
-            if self.compressor.is_lossless and not np.array_equal(raw_pixels, decoded_pixels):
+            if self.verify_lossless and self.compressor.is_lossless and not np.array_equal(raw_pixels, decoded_pixels):
                 is_lossless = False
                 print(f"第 {batch_idx + 1} 批次解压数据与原始数据不匹配！")
 
@@ -80,8 +88,10 @@ class CompressorEvaluator:
         
         print("\n========== 评估报告 ==========")
         print(f"算法名称: {self.compressor.algorithm_name}")
-        if self.compressor.is_lossless:
+        if self.compressor.is_lossless and self.verify_lossless:
             print(f"数据无损校验: {'通过 (Lossless)' if is_lossless else '失败 (Lossy)'}")
+        elif self.compressor.is_lossless:
+            print("Lossless verification: skipped by config (verify_lossless=false)")
         else:
             print("数据无损校验: 跳过，当前算法设计为有损压缩")
         print(f"基准数据体积: {total_original_bytes / 1024:.2f} KB")
@@ -90,3 +100,19 @@ class CompressorEvaluator:
         print(f"总压缩耗时 (Encode): {total_encode_time:.4f} 秒")
         print(f"总解压耗时 (Decode): {total_decode_time:.4f} 秒")
         print("=========================================\n")
+
+        lossless_check_passed = None
+        if self.compressor.is_lossless and self.verify_lossless:
+            lossless_check_passed = bool(is_lossless)
+
+        return {
+            "batch_size": batch_size,
+            "verify_lossless": self.verify_lossless,
+            "original_size_bytes": int(total_original_bytes),
+            "compressed_size_bytes": int(total_compressed_bytes),
+            "compression_ratio": float(cr),
+            "encode_seconds": float(total_encode_time),
+            "decode_seconds": float(total_decode_time),
+            "is_lossless_algorithm": bool(self.compressor.is_lossless),
+            "lossless_check_passed": lossless_check_passed,
+        }

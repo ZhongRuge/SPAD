@@ -1,43 +1,62 @@
-# 去噪？
-
-
-# ==========================================
-# SPAD 数据压缩仿真配置文件
-# ==========================================
-
-# 传感器物理参数 (Sensor Hardware)
 sensor:
-  width: 200            # 阵列宽度
-  height: 200           # 阵列高度
-  fps: 250000           # 帧率 (250k fps，每帧曝光时间约 4us)
-  pde: 1                # 光子探测效率 (0-1)
-  # !!!死区时间 还没写逻辑
+  width: 200
+  height: 200
+  fps: 250000
+  pde: 1
   dead_time_ns: 50
 
-# 仿真运行参数 (Simulation Control)
 simulation:
-  total_seconds: 0.02   # 仿真总时长(秒)，总帧数 = total_seconds * fps
-  batch_size: 1000      # 批处理帧数 (防止内存溢出)
-  random_seed: 42       # 随机种子，保证每次生成同样的数据对比不同算法
+  total_seconds: 0.02
+  batch_size: 1000
+  random_seed: 42
 
-# 场景与光学参数 (Scene & Optics)
-# 决定了空间相关性和时间相关性
 scene:
-  type: "moving_circle" # 场景类型 uniform_poisson | moving_circle
-  background_cps: 20    # 背景光(噪声)强度 (每像素每秒到达的光子数，泊松期望是 background_cps/fps = background_cps / 250,000)
-  signal_cps: 5000      # 目标光源强度 (高亮区域)
-  target_radius: 20     # 发光目标的半径 (像素)
-  velocity_pps: 5000    # 目标移动速度 (像素/秒，测试时间相关性)
+  type: "moving_circle"
+  background_cps: 20
+  signal_cps: 5000
+  target_radius: 20
+  velocity_pps: 5000
 
-# 传感器内部噪声 (Internal Non-idealities)
 noise:
-  dcr_cps: 20           # 暗计数率 (每个像素每秒产生的热噪声)
-  crosstalk_orthogonal_prob: 0.0044 # 上下左右单个邻域的瞬时串扰率，按公开文献中最近邻/对角邻域约 7.3:1 的量级粗略折算
-  crosstalk_diagonal_prob: 0.0006   # 四个角单个邻域的瞬时串扰率；8 邻域合计约为 2%
-  afterpulsing_prob: 0.01 # 后脉冲概率 (1%，破坏时间独立性)
+  dcr_cps: 20
+  crosstalk_orthogonal_prob: 0.0044
+  crosstalk_diagonal_prob: 0.0006
+  afterpulsing_prob: 0.01
 
-# I/O 与存储层 (Storage)
 io:
   output_dir: "../data"
   filename: "spad_dataset.bin"
-  save_as_bits: true    # 将 8 个像素打包为 1 Byte 存储
+  save_as_bits: true
+
+paths:
+  dataset:
+    output_dir: "../data"
+    filename: "spad_dataset.bin"
+  compression:
+    output_dir: "../data"
+
+runtime:
+  batch_size:
+    generate: 1000
+    compress: 1000
+
+compression:
+  algorithms:
+    - "rle"
+    - "delta_rle"
+    - "delta_sparse"
+    - "delta_sparse_zlib"
+    - "aer"
+    - "temporal_binning"
+  algorithm_params:
+    aer:
+      use_delta: false
+    temporal_binning:
+      bin_size: 255
+
+evaluation:
+  verify_lossless: true
+
+visualization:
+  compressed:
+    algorithm: "delta_sparse"

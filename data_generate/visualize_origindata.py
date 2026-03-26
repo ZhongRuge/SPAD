@@ -1,13 +1,13 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from simulation_io import load_config
+from simulation_io import resolve_dataset_paths
 from simulation_io import load_video_matrix
 from simulation_io import read_metadata
-from simulation_io import resolve_output_paths
 
 def visualize():
     config = load_config()
-    paths = resolve_output_paths(config)
+    paths = resolve_dataset_paths(config)
     meta = read_metadata(paths["meta_path"])
     # 可视化阶段直接整包读入，适合当前调研规模；超大数据集后续改为流式浏览。
     video_matrix = load_video_matrix(paths["data_path"], meta)
