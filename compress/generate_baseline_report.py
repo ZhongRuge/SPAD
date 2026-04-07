@@ -4,9 +4,21 @@ import sys
 from pathlib import Path
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+
+
+plt.rcParams["font.sans-serif"] = [
+    "Microsoft YaHei",
+    "SimHei",
+    "Noto Sans CJK SC",
+    "Arial Unicode MS",
+    "DejaVu Sans",
+]
+plt.rcParams["axes.unicode_minus"] = False
 
 
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -22,13 +34,21 @@ from simulation_io import resolve_dataset_paths
 
 
 LABELS = {
-    "rle": "RLE",
-    "delta_rle": "Delta+RLE",
-    "delta_sparse": "Delta+Sparse",
-    "delta_sparse_zlib": "Delta+Sparse+Zlib",
-    "aer": "AER",
-    "temporal_binning": "TemporalBinning",
+    "rle": "RLE 游程编码",
+    "delta_rle": "帧间差分 + RLE",
+    "delta_sparse": "帧间差分 + 稀疏坐标",
+    "delta_sparse_varint_zlib": "差分稀疏流 + Varint + Zlib",
+    "delta_sparse_zlib": "帧间差分 + 稀疏坐标 + Zlib",
+    "packbits_zlib": "位打包 + Zlib",
+    "global_event_stream": "全局事件流 + Zlib",
+    "aer": "AER 事件地址表示",
+    "temporal_binning": "时域累加 + Zlib",
 }
+
+TRADEOFF_CMAP = LinearSegmentedColormap.from_list(
+    "performance_red_to_green",
+    ["#2f9e44", "#f2c94c", "#d62828"],
+)
 
 
 def _load_json(path):
@@ -73,6 +93,75 @@ def _compute_balanced_choice(rows):
             best_score = balance_score
             best_row = row
     return best_row
+
+
+def _compute_tradeoff_scores(rows):
+    compression_scores = _normalize([row["compression_ratio"] for row in rows], reverse=False)
+    decode_scores = _normalize([row["decode_seconds"] for row in rows], reverse=True)
+
+    for row, compression_score, decode_score in zip(rows, compression_scores, decode_scores):
+        row["tradeoff_score"] = (compression_score + decode_score) / 2.0
+
+
+def _lossless_check_text(row):
+    if row["lossless_check_passed"] is True:
+        return "通过"
+    if row["lossless_check_passed"] is None:
+        return "不适用"
+    return "失败"
+
+
+def _cluster_rows(sorted_rows, y_threshold):
+    clusters = []
+    current_cluster = []
+    for row in sorted_rows:
+        if not current_cluster:
+            current_cluster = [row]
+            continue
+        if abs(row["compression_ratio"] - current_cluster[-1]["compression_ratio"]) <= y_threshold:
+            current_cluster.append(row)
+        else:
+            clusters.append(current_cluster)
+            current_cluster = [row]
+    if current_cluster:
+        clusters.append(current_cluster)
+    return clusters
+
+
+def _build_label_offsets(rows, plot_x_min, plot_x_max, plot_y_min, plot_y_max):
+    x_mid = (plot_x_min + plot_x_max) / 2.0
+    y_range = plot_y_max - plot_y_min
+    y_threshold = max(y_range * 0.06, 14.0)
+    offsets = {}
+
+    for side in ("left", "right"):
+        side_rows = [
+            row for row in rows
+            if (row["decode_seconds"] < x_mid if side == "left" else row["decode_seconds"] >= x_mid)
+        ]
+        side_rows.sort(key=lambda row: row["compression_ratio"])
+
+        for cluster in _cluster_rows(side_rows, y_threshold):
+            count = len(cluster)
+            spread_step = 8
+            spread = [int((index - (count - 1) / 2.0) * spread_step) for index in range(count)]
+
+            for row, cluster_offset in zip(cluster, spread):
+                if side == "left":
+                    x_offset = 8
+                else:
+                    x_offset = -82
+
+                if row["compression_ratio"] >= plot_y_max - y_range * 0.12:
+                    base_y_offset = -10
+                elif row["compression_ratio"] <= plot_y_min + y_range * 0.12:
+                    base_y_offset = 6
+                else:
+                    base_y_offset = 0
+
+                offsets[row["algorithm_id"]] = (x_offset, base_y_offset + cluster_offset)
+
+    return offsets
 
 
 def load_baseline_rows(run_dir):
@@ -123,26 +212,27 @@ def save_csv(rows, output_path):
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
-            csv_row = dict(row)
+            csv_row = {field: row.get(field) for field in fieldnames}
             csv_row["params"] = _params_to_text(csv_row["params"])
             writer.writerow(csv_row)
 
 
 def plot_compression_ratio(rows, output_path):
-    labels = [row["label"] for row in rows]
-    values = [row["compression_ratio"] for row in rows]
+    sorted_rows = sorted(rows, key=lambda row: row["compression_ratio"], reverse=True)
+    labels = [row["label"] for row in sorted_rows]
+    values = [row["compression_ratio"] for row in sorted_rows]
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    bars = ax.bar(labels, values, color="#2f5c8f")
-    ax.set_title("Baseline Compression Ratio by Algorithm")
-    ax.set_ylabel("Compression Ratio (x)")
-    ax.set_xlabel("Algorithm")
-    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    fig, ax = plt.subplots(figsize=(11.5, 6))
+    bars = ax.barh(labels, values, color="#2f5c8f")
+    ax.set_title("各算法基线压缩率对比")
+    ax.set_xlabel("压缩率 (x)")
+    ax.set_ylabel("算法")
+    ax.grid(axis="x", linestyle="--", alpha=0.3)
     ax.set_axisbelow(True)
-    plt.xticks(rotation=20, ha="right")
+    ax.invert_yaxis()
 
     for bar, value in zip(bars, values):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(), f"{value:.1f}x", ha="center", va="bottom", fontsize=9)
+        ax.text(value, bar.get_y() + bar.get_height() / 2, f" {value:.1f}x", va="center", fontsize=9)
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=180)
@@ -153,23 +243,32 @@ def plot_encode_decode_times(rows, output_path):
     labels = [row["label"] for row in rows]
     encode_values = [row["encode_seconds"] for row in rows]
     decode_values = [row["decode_seconds"] for row in rows]
-    x = range(len(rows))
+    x = np.arange(len(rows))
+    width = 0.36
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, ax = plt.subplots(figsize=(13.5, 6))
+    encode_bars = ax.bar(x - width / 2, encode_values, width=width, color="#d17b28", label="编码")
+    decode_bars = ax.bar(x + width / 2, decode_values, width=width, color="#2a9d8f", label="解码")
 
-    axes[0].bar(x, encode_values, color="#d17b28")
-    axes[0].set_title("Encode Time by Algorithm")
-    axes[0].set_ylabel("Seconds")
-    axes[0].set_xticks(list(x), labels, rotation=25, ha="right")
-    axes[0].grid(axis="y", linestyle="--", alpha=0.3)
-    axes[0].set_axisbelow(True)
+    ax.set_title("各算法编解码耗时成对对比")
+    ax.set_ylabel("耗时 (秒)")
+    ax.set_xlabel("算法")
+    ax.set_xticks(x, labels, rotation=25, ha="right")
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, ncol=2, loc="upper right")
 
-    axes[1].bar(x, decode_values, color="#3c9d5d")
-    axes[1].set_title("Decode Time by Algorithm")
-    axes[1].set_ylabel("Seconds")
-    axes[1].set_xticks(list(x), labels, rotation=25, ha="right")
-    axes[1].grid(axis="y", linestyle="--", alpha=0.3)
-    axes[1].set_axisbelow(True)
+    for bars in (encode_bars, decode_bars):
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                height,
+                f"{height:.2f}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=180)
@@ -177,18 +276,78 @@ def plot_encode_decode_times(rows, output_path):
 
 
 def plot_tradeoff(rows, output_path):
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for row in rows:
-        color = "#c44e52" if row["is_lossless_algorithm"] else "#8172b2"
-        marker = "o" if row["is_lossless_algorithm"] else "s"
-        ax.scatter(row["decode_seconds"], row["compression_ratio"], s=110, color=color, marker=marker, alpha=0.85)
-        ax.annotate(row["label"], (row["decode_seconds"], row["compression_ratio"]), textcoords="offset points", xytext=(6, 6), fontsize=9)
+    _compute_tradeoff_scores(rows)
 
-    ax.set_title("Compression Ratio vs Decode Time")
-    ax.set_xlabel("Decode Time (s)")
-    ax.set_ylabel("Compression Ratio (x)")
-    ax.grid(True, linestyle="--", alpha=0.3)
+    fig, ax = plt.subplots(figsize=(9.8, 6.6))
+
+    x_min = min(row["decode_seconds"] for row in rows)
+    x_max = max(row["decode_seconds"] for row in rows)
+    y_min = min(row["compression_ratio"] for row in rows)
+    y_max = max(row["compression_ratio"] for row in rows)
+    x_padding = max((x_max - x_min) * 0.15, 0.08)
+    y_padding = max((y_max - y_min) * 0.10, 10.0)
+    plot_x_min = max(0.0, x_min - x_padding)
+    plot_x_max = x_max + x_padding
+    plot_y_min = max(0.0, y_min - y_padding)
+    plot_y_max = y_max + y_padding
+
+    gradient_size = 300
+    x_values = np.linspace(0.0, 1.0, gradient_size)
+    y_values = np.linspace(0.0, 1.0, gradient_size)
+    xx, yy = np.meshgrid(x_values, y_values)
+    background_score = (yy + (1.0 - xx)) / 2.0
+    ax.imshow(
+        background_score,
+        extent=[plot_x_min, plot_x_max, plot_y_min, plot_y_max],
+        origin="lower",
+        cmap=TRADEOFF_CMAP,
+        alpha=0.16,
+        aspect="auto",
+    )
+
+    scores = [row["tradeoff_score"] for row in rows]
+    colors = [TRADEOFF_CMAP(score) for score in scores]
+    ax.scatter(
+        [row["decode_seconds"] for row in rows],
+        [row["compression_ratio"] for row in rows],
+        s=130,
+        c=colors,
+        marker="o",
+        edgecolors="white",
+        linewidths=0.9,
+        alpha=0.95,
+    )
+
+    offsets = _build_label_offsets(rows, plot_x_min, plot_x_max, plot_y_min, plot_y_max)
+    for row in rows:
+        x_offset, y_offset = offsets[row["algorithm_id"]]
+        ax.annotate(
+            row["label"],
+            (row["decode_seconds"], row["compression_ratio"]),
+            textcoords="offset points",
+            xytext=(x_offset, y_offset),
+            fontsize=9,
+            annotation_clip=False,
+        )
+
+    ax.set_title("压缩率与解码耗时权衡")
+    ax.set_xlabel("解码耗时 (秒，越小越好)")
+    ax.set_ylabel("压缩率 (x，越大越好)")
+    ax.grid(True, linestyle="--", alpha=0.28)
     ax.set_axisbelow(True)
+    ax.set_xlim(plot_x_min, plot_x_max)
+    ax.set_ylim(plot_y_min, plot_y_max)
+
+    ax.text(
+        0.015,
+        0.98,
+        "左上更优，右下更弱",
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        fontsize=9,
+        bbox={"facecolor": "white", "edgecolor": "#cccccc", "alpha": 0.85, "boxstyle": "round,pad=0.25"},
+    )
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=180)
@@ -203,55 +362,56 @@ def write_summary(run_manifest, rows, output_path, figure_paths):
     best_decode_lossless = min(_lossless_rows(rows), key=lambda row: row["decode_seconds"])
     most_balanced = _compute_balanced_choice(rows)
 
-    suspicious_points = [
-        "TemporalBinning is lossy, so its compression ratio is not directly comparable to the lossless algorithms.",
-        "All current conclusions are based on a single dataset configuration and one latest run; more scenes/noise settings are still worth testing.",
-        "Delta+RLE underperforms the other delta-based lossless baselines here, which is worth keeping in mind if future datasets become less sparse.",
+    follow_up_notes = [
+        "TemporalBinning 属于有损算法，它的压缩率不能与无损算法直接横向比较。",
+        "当前结论主要基于单一数据集配置与最近一次运行结果，后续仍建议扩展到更多场景和噪声水平。",
+        "Delta+RLE 在当前稀疏 SPAD 数据上明显弱于其他差分型无损基线，后续是否保留可视具体研究目标决定。",
+        "Delta+Sparse+Varint+Zlib 通过减少索引元数据开销提升压缩率，在空帧多、事件很稀疏时更有优势。",
+        "GlobalEventStream 更适合整批数据全局稀疏的情况，而 PackBits+Zlib 更像通用、实现简单的强基线。",
     ]
 
     lines = [
-        "# Baseline Compression Analysis",
+        "# 基线压缩分析",
         "",
-        f"- Run ID: `{run_manifest['run_id']}`",
-        f"- Dataset: `{run_manifest['dataset']['name']}`",
-        f"- Data Path: `{run_manifest['dataset']['data_path']}`",
-        f"- Meta Path: `{run_manifest['dataset']['meta_path']}`",
+        f"- 运行编号：`{run_manifest['run_id']}`",
+        f"- 数据集：`{run_manifest['dataset']['name']}`",
+        f"- 数据路径：`{run_manifest['dataset']['data_path']}`",
+        f"- 元数据路径：`{run_manifest['dataset']['meta_path']}`",
         "",
-        "## Key Findings",
+        "## 关键结论",
         "",
-        f"- Best compression ratio overall: `{best_cr_all['label']}` at `{best_cr_all['compression_ratio']:.2f}x`.",
-        f"- Best compression ratio among lossless algorithms: `{best_cr_lossless['label']}` at `{best_cr_lossless['compression_ratio']:.2f}x`.",
-        f"- Fastest encode: `{best_encode['label']}` at `{best_encode['encode_seconds']:.4f}s`.",
-        f"- Fastest decode overall: `{best_decode['label']}` at `{best_decode['decode_seconds']:.4f}s`.",
-        f"- Fastest decode among lossless algorithms: `{best_decode_lossless['label']}` at `{best_decode_lossless['decode_seconds']:.4f}s`.",
-        f"- Most balanced lossless baseline: `{most_balanced['label']}`.",
+        f"- 整体压缩率最高：`{best_cr_all['label']}`，压缩率为 `{best_cr_all['compression_ratio']:.2f}x`。",
+        f"- 无损算法中压缩率最高：`{best_cr_lossless['label']}`，压缩率为 `{best_cr_lossless['compression_ratio']:.2f}x`。",
+        f"- 编码最快：`{best_encode['label']}`，耗时 `{best_encode['encode_seconds']:.4f}s`。",
+        f"- 整体解码最快：`{best_decode['label']}`，耗时 `{best_decode['decode_seconds']:.4f}s`。",
+        f"- 无损算法中解码最快：`{best_decode_lossless['label']}`，耗时 `{best_decode_lossless['decode_seconds']:.4f}s`。",
+        f"- 综合最均衡的无损基线：`{most_balanced['label']}`。",
         "",
-        "## Results Table",
+        "## 结果表",
         "",
-        "| Algorithm | Params | CR | Size (bytes) | Encode (s) | Decode (s) | Lossless Check |",
+        "| 算法 | 参数 | 压缩率 | 压缩后大小 (字节) | 编码耗时 (秒) | 解码耗时 (秒) | 无损校验 |",
         "|---|---|---:|---:|---:|---:|---|",
     ]
 
     for row in rows:
-        lossless_text = "PASS" if row["lossless_check_passed"] is True else ("N/A" if row["lossless_check_passed"] is None else "FAIL")
         lines.append(
-            f"| {row['label']} | `{_params_to_text(row['params'])}` | {row['compression_ratio']:.4f}x | {row['compressed_size_bytes']} | {row['encode_seconds']:.4f} | {row['decode_seconds']:.4f} | {lossless_text} |"
+            f"| {row['label']} | `{_params_to_text(row['params'])}` | {row['compression_ratio']:.4f}x | {row['compressed_size_bytes']} | {row['encode_seconds']:.4f} | {row['decode_seconds']:.4f} | {_lossless_check_text(row)} |"
         )
 
     lines.extend(
         [
             "",
-            "## Generated Figures",
+            "## 生成图表",
             "",
-            f"- Compression ratio chart: `{figure_paths['compression_ratio']}`",
-            f"- Encode/decode time chart: `{figure_paths['encode_decode_times']}`",
-            f"- Tradeoff chart: `{figure_paths['tradeoff']}`",
+            f"- 压缩率对比图：`{figure_paths['compression_ratio']}`",
+            f"- 编解码耗时对比图：`{figure_paths['encode_decode_times']}`",
+            f"- 压缩率与解码耗时权衡图：`{figure_paths['tradeoff']}`",
             "",
-            "## Follow-up Notes",
+            "## 备注",
             "",
         ]
     )
-    lines.extend([f"- {point}" for point in suspicious_points])
+    lines.extend([f"- {point}" for point in follow_up_notes])
     lines.append("")
 
     with open(output_path, "w", encoding="utf-8") as file:
@@ -264,18 +424,18 @@ def main():
     dataset_name = dataset_name_from_paths(dataset_paths)
     run_dir = find_latest_run_dir(resolve_compression_output_dir(config), dataset_name)
     if run_dir is None:
-        raise SystemExit("No baseline run found for current dataset.")
+        raise SystemExit("当前数据集还没有可用的 baseline 运行结果。")
 
     run_manifest, rows = load_baseline_rows(run_dir)
     analysis_dir = run_dir / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
 
-    compression_ratio_path = analysis_dir / "compression_ratio.png"
-    encode_decode_times_path = analysis_dir / "encode_decode_times.png"
-    tradeoff_path = analysis_dir / "compression_ratio_vs_decode_time.png"
-    csv_path = analysis_dir / "baseline_results.csv"
-    summary_path = analysis_dir / "baseline_summary.md"
-    summary_json_path = analysis_dir / "baseline_summary.json"
+    compression_ratio_path = analysis_dir / "压缩率对比图.png"
+    encode_decode_times_path = analysis_dir / "编解码耗时对比图.png"
+    tradeoff_path = analysis_dir / "压缩率与解码耗时权衡图.png"
+    csv_path = analysis_dir / "基线结果表.csv"
+    summary_path = analysis_dir / "基线分析总结.md"
+    summary_json_path = analysis_dir / "基线分析总结.json"
 
     plot_compression_ratio(rows, compression_ratio_path)
     plot_encode_decode_times(rows, encode_decode_times_path)
@@ -309,12 +469,12 @@ def main():
     with open(summary_json_path, "w", encoding="utf-8") as file:
         json.dump(summary_payload, file, indent=2, ensure_ascii=False)
 
-    print(f"Analysis output directory: {analysis_dir.resolve()}")
-    print(f"Compression ratio figure: {compression_ratio_path.resolve()}")
-    print(f"Encode/decode time figure: {encode_decode_times_path.resolve()}")
-    print(f"Tradeoff figure: {tradeoff_path.resolve()}")
-    print(f"Summary markdown: {summary_path.resolve()}")
-    print(f"Results CSV: {csv_path.resolve()}")
+    print(f"分析输出目录：{analysis_dir.resolve()}")
+    print(f"压缩率图：{compression_ratio_path.resolve()}")
+    print(f"编解码耗时图：{encode_decode_times_path.resolve()}")
+    print(f"权衡图：{tradeoff_path.resolve()}")
+    print(f"总结文档：{summary_path.resolve()}")
+    print(f"结果表：{csv_path.resolve()}")
 
 
 if __name__ == "__main__":

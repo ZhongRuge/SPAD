@@ -28,27 +28,21 @@ from data_generate.simulation_io import resolve_output_paths
 from compress.io_manager import SpadIOManager
 from compress.algorithms import (
     AerCompressor,
-    RleCompressor,
     DeltaRleCompressor,
-    H264VideoCompressor,
-    H265VideoCompressor,
     DeltaSparseCompressor,
-    DeltaGapZlibCompressor,
-    PackBitsZlibCompressor,
-    RowSparseZlibCompressor,
+    DeltaSparseVarintZlibCompressor,
     DeltaSparseZlibCompressor,
-    TemporalBinningCompressor,
     GlobalEventStreamCompressor,
-    BlockSparseBitmapCompressor,
-    MortonPackBitsZlibCompressor,
-    FrameZeroSuppressionCompressor
+    PackBitsZlibCompressor,
+    RleCompressor,
+    TemporalBinningCompressor,
 )
 
 
 def cps_from_expected_hits_per_frame(expected_hits_per_frame: float, pixels_per_frame: int, fps: int) -> float:
     per_pixel_hit_probability = expected_hits_per_frame / pixels_per_frame
     if per_pixel_hit_probability < 0 or per_pixel_hit_probability >= 1:
-        raise ValueError("每帧期望命中数必须映射到 [0, 1) 的像素概率")
+        raise ValueError("expected_hits_per_frame must map to a per-pixel probability in [0, 1)")
     if per_pixel_hit_probability == 0:
         return 0.0
     return -fps * math.log1p(-per_pixel_hit_probability)
@@ -58,39 +52,73 @@ def expected_hits_per_frame_from_cps(cps: float, pixels_per_frame: int, fps: int
     return pixels_per_frame * (1.0 - math.exp(-float(cps) / fps))
 
 
+def _configured_noise_cases(base_config: dict):
+    benchmark_config = base_config.get("benchmark", {})
+    noise_sweep_config = benchmark_config.get("noise_sweep", {})
+    configured_cases = noise_sweep_config.get("cases")
+    if not configured_cases:
+        return None
+
+    cases = []
+    for case in configured_cases:
+        if not isinstance(case, dict):
+            raise ValueError("benchmark.noise_sweep.cases entries must be mappings")
+
+        name = str(case.get("name", "")).strip()
+        if not name:
+            raise ValueError("benchmark.noise_sweep.cases[].name cannot be blank")
+
+        background_cps = float(case["background_cps"])
+        dcr_cps = float(case["dcr_cps"])
+        if background_cps < 0 or dcr_cps < 0:
+            raise ValueError("benchmark.noise_sweep case cps values must be non-negative")
+
+        cases.append(
+            {
+                "name": name,
+                "description": str(case.get("description", name)).strip() or name,
+                "background_cps": background_cps,
+                "dcr_cps": dcr_cps,
+            }
+        )
+
+    return cases
+
+
 def build_noise_cases(base_config: dict):
     fps = int(base_config["sensor"]["fps"])
     pixels_per_frame = int(base_config["sensor"]["width"]) * int(base_config["sensor"]["height"])
 
-    baseline_background_cps = float(base_config["scene"]["background_cps"])
-    baseline_dcr_cps = float(base_config["noise"]["dcr_cps"])
-
-    cases = [
-        {
-            "name": "baseline",
-            "description": "配置文件当前基线",
-            "background_cps": baseline_background_cps,
-            "dcr_cps": baseline_dcr_cps,
-        },
-        {
-            "name": "low_noise",
-            "description": "低噪声，独立背景噪声和暗计数各约 8 次/帧",
-            "background_cps": cps_from_expected_hits_per_frame(8.0, pixels_per_frame, fps),
-            "dcr_cps": cps_from_expected_hits_per_frame(8.0, pixels_per_frame, fps),
-        },
-        {
-            "name": "medium_noise",
-            "description": "中噪声，独立背景噪声和暗计数各约 32 次/帧",
-            "background_cps": cps_from_expected_hits_per_frame(32.0, pixels_per_frame, fps),
-            "dcr_cps": cps_from_expected_hits_per_frame(32.0, pixels_per_frame, fps),
-        },
-        {
-            "name": "high_noise",
-            "description": "高噪声，独立背景噪声和暗计数各约 128 次/帧",
-            "background_cps": cps_from_expected_hits_per_frame(128.0, pixels_per_frame, fps),
-            "dcr_cps": cps_from_expected_hits_per_frame(128.0, pixels_per_frame, fps),
-        },
-    ]
+    cases = _configured_noise_cases(base_config)
+    if cases is None:
+        baseline_background_cps = float(base_config["scene"]["background_cps"])
+        baseline_dcr_cps = float(base_config["noise"]["dcr_cps"])
+        cases = [
+            {
+                "name": "baseline",
+                "description": "Current config baseline noise",
+                "background_cps": baseline_background_cps,
+                "dcr_cps": baseline_dcr_cps,
+            },
+            {
+                "name": "low_noise",
+                "description": "Balanced low-noise setting",
+                "background_cps": cps_from_expected_hits_per_frame(8.0, pixels_per_frame, fps),
+                "dcr_cps": cps_from_expected_hits_per_frame(8.0, pixels_per_frame, fps),
+            },
+            {
+                "name": "medium_noise",
+                "description": "Balanced medium-noise setting",
+                "background_cps": cps_from_expected_hits_per_frame(32.0, pixels_per_frame, fps),
+                "dcr_cps": cps_from_expected_hits_per_frame(32.0, pixels_per_frame, fps),
+            },
+            {
+                "name": "high_noise",
+                "description": "Balanced high-noise setting",
+                "background_cps": cps_from_expected_hits_per_frame(128.0, pixels_per_frame, fps),
+                "dcr_cps": cps_from_expected_hits_per_frame(128.0, pixels_per_frame, fps),
+            },
+        ]
 
     for case in cases:
         case["expected_background_hits_per_frame"] = expected_hits_per_frame_from_cps(
@@ -115,18 +143,12 @@ def build_test_algorithms():
         AerCompressor(use_delta=False),
         RleCompressor(),
         DeltaRleCompressor(),
-        H264VideoCompressor(preset="ultrafast"),
-        H265VideoCompressor(preset="ultrafast"),
         DeltaSparseCompressor(),
-        DeltaGapZlibCompressor(),
+        DeltaSparseVarintZlibCompressor(),
         PackBitsZlibCompressor(),
-        RowSparseZlibCompressor(),
         DeltaSparseZlibCompressor(),
         TemporalBinningCompressor(bin_size=255),
         GlobalEventStreamCompressor(),
-        BlockSparseBitmapCompressor(),
-        MortonPackBitsZlibCompressor(),
-        FrameZeroSuppressionCompressor()
     ]
 
 
@@ -211,10 +233,14 @@ def run_case(base_config: dict, case: dict):
     config["noise"]["dcr_cps"] = float(case["dcr_cps"])
     config["io"]["output_dir"] = "../data/noise_sweep"
     config["io"]["filename"] = f"spad_dataset_{case['name']}.bin"
+    config.setdefault("paths", {})
+    config["paths"].setdefault("dataset", {})
+    config["paths"]["dataset"]["output_dir"] = "../data/noise_sweep"
+    config["paths"]["dataset"]["filename"] = f"spad_dataset_{case['name']}.bin"
     write_config(config)
 
     print(
-        f"\n===== 开始噪声案例: {case['name']} | "
+        f"\n===== Starting noise case: {case['name']} | "
         f"background_cps={case['background_cps']:.3f}, dcr_cps={case['dcr_cps']:.3f} ====="
     )
 
@@ -311,8 +337,8 @@ def main():
         CONFIG_PATH.write_text(original_config_text, encoding="utf-8")
 
     save_results(all_results)
-    print(f"\n结果已写入: {RESULTS_JSON_PATH}")
-    print(f"结果已写入: {RESULTS_CSV_PATH}")
+    print(f"\nResults written to: {RESULTS_JSON_PATH}")
+    print(f"Results written to: {RESULTS_CSV_PATH}")
 
 
 if __name__ == "__main__":

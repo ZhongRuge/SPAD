@@ -1,62 +1,117 @@
-sensor:
-  width: 200
-  height: 200
-  fps: 250000
-  pde: 1
-  dead_time_ns: 50
+sensor:                                        # SPAD 传感器硬件与采样参数
+  width: 200                                   # 传感器宽度，单位为像素
+  height: 200                                  # 传感器高度，单位为像素
+  fps: 250000                                  # 采样帧率，单位为帧每秒
+  pde: 1                                       # 光子探测效率，取值范围为 [0, 1]
+  dead_time_ns: 50                             # (未实现!)每次探测后的死区时间，单位为纳秒
 
-simulation:
-  total_seconds: 0.02
-  batch_size: 1000
-  random_seed: 42
+simulation:                                    # 数据生成阶段的仿真参数
+  total_seconds: 0.02                          # 仿真总时长，单位为秒
+  batch_size: 1000                             # 生成数据时默认使用的批大小
+  random_seed: 42                              # 随机种子，用于保证实验可复现
 
-scene:
-  type: "moving_circle"
-  background_cps: 20
-  signal_cps: 5000
-  target_radius: 20
-  velocity_pps: 5000
+scene:                                         # 场景与目标运动参数
+  type: "moving_circle"                        # 场景类型，可选 moving_circle 或 uniform_poisson
+  background_cps: 20                           # 背景光子计数率，单位为每像素每秒
+  signal_cps: 5000                             # 目标区域信号光子计数率，单位为每像素每秒
+  target_radius: 20                            # 运动目标半径，单位为像素
+  velocity_pps: 5000                           # 目标速度，单位为像素每秒
 
-noise:
-  dcr_cps: 20
-  crosstalk_orthogonal_prob: 0.0044
-  crosstalk_diagonal_prob: 0.0006
-  afterpulsing_prob: 0.01
+noise:                                         # 传感器噪声模型参数
+  dcr_cps: 20                                  # 暗计数率，单位为每像素每秒
+  crosstalk_orthogonal_prob: 0.0044            # 正交相邻像素串扰概率
+  crosstalk_diagonal_prob: 0.0006              # 对角相邻像素串扰概率
+  afterpulsing_prob: 0.01                      # 后脉冲噪声概率
 
-io:
-  output_dir: "../data"
-  filename: "spad_dataset.bin"
-  save_as_bits: true
+io:                                            # 原始数据集默认输出参数
+  output_dir: "../data"                        # 未显式覆盖路径时的默认输出目录
+  filename: "spad_dataset.bin"                 # 原始 SPAD 数据文件名
+  save_as_bits: true                           # 是否按位打包存储原始帧，而不是每像素 1 字节
 
-paths:
-  dataset:
-    output_dir: "../data"
-    filename: "spad_dataset.bin"
-  compression:
-    output_dir: "../data"
+paths:                                         # 项目中显式指定的路径覆盖项
+  dataset:                                     # 原始数据集读写路径
+    output_dir: "../data"                      # 生成原始 SPAD 数据的目录
+    filename: "spad_dataset.bin"               # 原始 SPAD 数据文件名覆盖项
+  compression:                                 # 压缩实验结果输出路径
+    output_dir: "../data"                      # 压缩运行结果与分析报告的根目录
 
-runtime:
-  batch_size:
-    generate: 1000
-    compress: 1000
+runtime:                                       # 各阶段运行时参数
+  batch_size:                                  # 不同阶段的批大小覆盖项
+    generate: 1000                             # 数据生成阶段使用的批大小
+    compress: 1000                             # 压缩评测阶段使用的批大小
 
-compression:
-  algorithms:
-    - "rle"
-    - "delta_rle"
-    - "delta_sparse"
-    - "delta_sparse_zlib"
-    - "aer"
-    - "temporal_binning"
-  algorithm_params:
-    aer:
-      use_delta: false
-    temporal_binning:
-      bin_size: 255
+compression:                                   # 压缩 benchmark 配置
+  algorithms:                                  # compress/main_compress.py 默认评测的算法列表
+    - "rle"                                    # 无损游程编码基线
+    - "delta_rle"                              # 无损帧间差分加游程编码基线
+    - "delta_sparse"                           # 无损帧间差分加稀疏坐标编码基线
+    - "delta_sparse_varint_zlib"               # 无损稀疏差分流加 varint 与 zlib
+    - "delta_sparse_zlib"                      # 无损固定宽度稀疏差分流加 zlib
+    - "packbits_zlib"                          # 无损位打包加 zlib 基线
+    - "global_event_stream"                    # 无损全局事件流加 zlib 基线
+    - "aer"                                    # 无损 AER 事件地址表示基线
+    - "temporal_binning"                       # 有损时域累加基线
+  algorithm_params:                            # 各压缩算法的参数覆盖项
+    aer:                                       # AER 算法参数
+      use_delta: false                         # false 表示编码原始事件，true 表示编码帧间变化事件
+    temporal_binning:                          # TemporalBinning 算法参数
+      bin_size: 255                            # 累加成一个 8-bit 灰度帧时使用的帧数
 
-evaluation:
-  verify_lossless: true
+evaluation:                                    # 压缩评测行为配置
+  verify_lossless: true                        # 是否对无损算法执行解压重建校验
 
-visualization:
-  compressed:
-    algorithm: "delta_sparse"
+visualization:                                 # 可视化脚本使用的配置
+  compressed:                                  # 指定要可视化的压缩结果
+    algorithm: "temporal_binning"             # 用于可视化的算法 id
+
+benchmark:                                     # 离线 benchmark 与 sweep 配置
+  noise_sweep:                                 # 多种噪声情景下的压缩对比测试配置
+    cases:                                     # 每个情景都会覆盖 scene.background_cps 与 noise.dcr_cps
+      - name: "balanced_004"                   # 总独立噪声约为 4 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 4 hits/frame" # 情景说明
+        background_cps: 12.500313              # 对应每帧约 2 次背景命中
+        dcr_cps: 12.500313                     # 对应每帧约 2 次暗计数命中
+      - name: "balanced_008"                   # 总独立噪声约为 8 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 8 hits/frame" # 情景说明
+        background_cps: 25.00125               # 对应每帧约 4 次背景命中
+        dcr_cps: 25.00125                      # 对应每帧约 4 次暗计数命中
+      - name: "balanced_012"                   # 总独立噪声约为 12 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 12 hits/frame" # 情景说明
+        background_cps: 37.502813              # 对应每帧约 6 次背景命中
+        dcr_cps: 37.502813                     # 对应每帧约 6 次暗计数命中
+      - name: "balanced_016"                   # 总独立噪声约为 16 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 16 hits/frame" # 情景说明
+        background_cps: 50.005001              # 对应每帧约 8 次背景命中
+        dcr_cps: 50.005001                     # 对应每帧约 8 次暗计数命中
+      - name: "balanced_024"                   # 总独立噪声约为 24 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 24 hits/frame" # 情景说明
+        background_cps: 75.011252              # 对应每帧约 12 次背景命中
+        dcr_cps: 75.011252                     # 对应每帧约 12 次暗计数命中
+      - name: "balanced_032"                   # 总独立噪声约为 32 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 32 hits/frame" # 情景说明
+        background_cps: 100.020005             # 对应每帧约 16 次背景命中
+        dcr_cps: 100.020005                    # 对应每帧约 16 次暗计数命中
+      - name: "balanced_048"                   # 总独立噪声约为 48 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 48 hits/frame" # 情景说明
+        background_cps: 150.045018             # 对应每帧约 24 次背景命中
+        dcr_cps: 150.045018                    # 对应每帧约 24 次暗计数命中
+      - name: "balanced_064"                   # 总独立噪声约为 64 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 64 hits/frame" # 情景说明
+        background_cps: 200.080043             # 对应每帧约 32 次背景命中
+        dcr_cps: 200.080043                    # 对应每帧约 32 次暗计数命中
+      - name: "balanced_096"                   # 总独立噪声约为 96 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 96 hits/frame" # 情景说明
+        background_cps: 300.180144             # 对应每帧约 48 次背景命中
+        dcr_cps: 300.180144                    # 对应每帧约 48 次暗计数命中
+      - name: "balanced_128"                   # 总独立噪声约为 128 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 128 hits/frame" # 情景说明
+        background_cps: 400.320342             # 对应每帧约 64 次背景命中
+        dcr_cps: 400.320342                    # 对应每帧约 64 次暗计数命中
+      - name: "balanced_192"                   # 总独立噪声约为 192 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 192 hits/frame" # 情景说明
+        background_cps: 600.721154             # 对应每帧约 96 次背景命中
+        dcr_cps: 600.721154                    # 对应每帧约 96 次暗计数命中
+      - name: "balanced_256"                   # 总独立噪声约为 256 hits/frame
+        description: "平衡噪声：background 与 dcr 各承担一半，总噪声约 256 hits/frame" # 情景说明
+        background_cps: 801.282737             # 对应每帧约 128 次背景命中
+        dcr_cps: 801.282737                    # 对应每帧约 128 次暗计数命中

@@ -9,5 +9,4 @@
 
 # Only allow Python source, binary dataset, and YAML config files.
 !*.py
-!*.bin
 !*.yaml

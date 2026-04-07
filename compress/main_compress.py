@@ -28,11 +28,64 @@ from simulation_io import resolve_enabled_algorithms
 from simulation_io import resolve_evaluator_config
 
 
+def _print_startup_config_summary(config, dataset_paths, compression_output_dir, evaluator_config):
+    sensor_cfg = config.get("sensor", {})
+    simulation_cfg = config.get("simulation", {})
+    scene_cfg = config.get("scene", {})
+    noise_cfg = config.get("noise", {})
+    runtime_cfg = config.get("runtime", {}).get("batch_size", {})
+    enabled_algorithms = resolve_enabled_algorithms(config)
+
+    print("\n=== Compression Run Config Summary ===")
+    print(f"Dataset data path        : {Path(dataset_paths['data_path']).resolve()}")
+    print(f"Dataset meta path        : {Path(dataset_paths['meta_path']).resolve()}")
+    print(f"Output root              : {Path(compression_output_dir).resolve()}")
+    print("")
+    print("Sensor:")
+    print(f"  width x height         : {sensor_cfg.get('width')} x {sensor_cfg.get('height')}")
+    print(f"  fps                    : {sensor_cfg.get('fps')}")
+    print(f"  pde                    : {sensor_cfg.get('pde')}")
+    print(f"  dead_time_ns           : {sensor_cfg.get('dead_time_ns')}")
+    print("")
+    print("Simulation:")
+    print(f"  total_seconds          : {simulation_cfg.get('total_seconds')}")
+    print(f"  batch_size(generate)   : {simulation_cfg.get('batch_size')}")
+    print(f"  random_seed            : {simulation_cfg.get('random_seed')}")
+    print("")
+    print("Scene:")
+    print(f"  type                   : {scene_cfg.get('type')}")
+    print(f"  background_cps         : {scene_cfg.get('background_cps')}")
+    print(f"  signal_cps             : {scene_cfg.get('signal_cps')}")
+    print(f"  target_radius          : {scene_cfg.get('target_radius')}")
+    print(f"  velocity_pps           : {scene_cfg.get('velocity_pps')}")
+    print("")
+    print("Noise:")
+    print(f"  dcr_cps                : {noise_cfg.get('dcr_cps')}")
+    print(f"  crosstalk_orthogonal   : {noise_cfg.get('crosstalk_orthogonal_prob')}")
+    print(f"  crosstalk_diagonal     : {noise_cfg.get('crosstalk_diagonal_prob')}")
+    print(f"  afterpulsing_prob      : {noise_cfg.get('afterpulsing_prob')}")
+    print("")
+    print("Runtime/Evaluation:")
+    print(f"  batch_size(compress)   : {evaluator_config.get('batch_size')}")
+    print(f"  batch_size(runtime)    : {runtime_cfg.get('compress')}")
+    print(f"  verify_lossless        : {evaluator_config.get('verify_lossless')}")
+    print("")
+    print(f"Algorithms ({len(enabled_algorithms)}):")
+    for algorithm_id in enabled_algorithms:
+        algorithm_params = resolve_algorithm_params(config, algorithm_id)
+        if algorithm_params:
+            print(f"  - {algorithm_id}: {algorithm_params}")
+        else:
+            print(f"  - {algorithm_id}")
+    print("======================================\n")
+
+
 def main():
     config = load_config(DATA_GENERATE_DIR / "config.yaml")
     dataset_paths = resolve_dataset_paths(config)
     compression_output_dir = resolve_compression_output_dir(config)
     evaluator_config = resolve_evaluator_config(config)
+    _print_startup_config_summary(config, dataset_paths, compression_output_dir, evaluator_config)
 
     meta_path = dataset_paths["meta_path"]
     data_path = dataset_paths["data_path"]

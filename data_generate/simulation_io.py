@@ -12,7 +12,10 @@ DEFAULT_ALGORITHMS = [
     "rle",
     "delta_rle",
     "delta_sparse",
+    "delta_sparse_varint_zlib",
     "delta_sparse_zlib",
+    "packbits_zlib",
+    "global_event_stream",
     "aer",
     "temporal_binning",
 ]
@@ -44,6 +47,7 @@ def validate_config(config):
     compression = config.get("compression", {})
     evaluation = config.get("evaluation", {})
     visualization = config.get("visualization", {})
+    benchmark = config.get("benchmark", {})
 
     _require_positive_int(sensor["width"], "sensor.width")
     _require_positive_int(sensor["height"], "sensor.height")
@@ -125,6 +129,23 @@ def validate_config(config):
         algorithm_id = compressed_visualization.get("algorithm")
         if algorithm_id is not None and not str(algorithm_id).strip():
             raise ValueError("visualization.compressed.algorithm cannot be blank")
+
+    noise_sweep = benchmark.get("noise_sweep", {})
+    noise_cases = noise_sweep.get("cases")
+    if noise_cases is not None:
+        if not isinstance(noise_cases, list) or not noise_cases:
+            raise ValueError("benchmark.noise_sweep.cases must be a non-empty list")
+        for index, case in enumerate(noise_cases):
+            if not isinstance(case, dict):
+                raise ValueError(f"benchmark.noise_sweep.cases[{index}] must be a mapping")
+            if not str(case.get("name", "")).strip():
+                raise ValueError(f"benchmark.noise_sweep.cases[{index}].name cannot be blank")
+            if "background_cps" not in case:
+                raise ValueError(f"benchmark.noise_sweep.cases[{index}].background_cps is required")
+            if "dcr_cps" not in case:
+                raise ValueError(f"benchmark.noise_sweep.cases[{index}].dcr_cps is required")
+            _require_non_negative(case.get("background_cps", 0.0), f"benchmark.noise_sweep.cases[{index}].background_cps")
+            _require_non_negative(case.get("dcr_cps", 0.0), f"benchmark.noise_sweep.cases[{index}].dcr_cps")
 
 
 def _require_positive_int(value, field_name):
