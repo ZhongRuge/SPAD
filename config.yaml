@@ -1,0 +1,117 @@
+sensor:
+  width: 200
+  height: 200
+  fps: 250000
+  pde: 1
+  dead_time_ns: 50
+
+simulation:
+  total_seconds: 0.02
+  batch_size: 1000
+  random_seed: 42
+
+scene:
+  type: "moving_circle"
+  background_cps: 20
+  signal_cps: 5000
+  target_radius: 20
+  velocity_pps: 5000
+
+noise:
+  dcr_cps: 20
+  crosstalk_orthogonal_prob: 0.0044
+  crosstalk_diagonal_prob: 0.0006
+  afterpulsing_prob: 0.01
+
+io:
+  output_dir: "./data"
+  filename: "spad_dataset.bin"
+  save_as_bits: true
+
+paths:
+  dataset:
+    output_dir: "./data"
+    filename: "spad_dataset.bin"
+  compression:
+    output_dir: "./data"
+
+runtime:
+  batch_size:
+    generate: 1000
+    compress: 1000
+
+compression:
+  algorithms:
+    - "rle"
+    - "delta_rle"
+    - "delta_sparse"
+    - "delta_sparse_varint_zlib"
+    - "delta_sparse_zlib"
+    - "packbits_zlib"
+    - "global_event_stream"
+    - "aer"
+    - "temporal_binning"
+  algorithm_params:
+    aer:
+      use_delta: false
+    temporal_binning:
+      bin_size: 255
+
+evaluation:
+  verify_lossless: true
+
+visualization:
+  compressed:
+    algorithm: "temporal_binning"
+
+benchmark:
+  noise_sweep:
+    cases:
+      - name: "balanced_004"
+        description: "平衡噪声：总噪声约 4 hits/frame"
+        background_cps: 12.500313
+        dcr_cps: 12.500313
+      - name: "balanced_008"
+        description: "平衡噪声：总噪声约 8 hits/frame"
+        background_cps: 25.00125
+        dcr_cps: 25.00125
+      - name: "balanced_012"
+        description: "平衡噪声：总噪声约 12 hits/frame"
+        background_cps: 37.502813
+        dcr_cps: 37.502813
+      - name: "balanced_016"
+        description: "平衡噪声：总噪声约 16 hits/frame"
+        background_cps: 50.005001
+        dcr_cps: 50.005001
+      - name: "balanced_024"
+        description: "平衡噪声：总噪声约 24 hits/frame"
+        background_cps: 75.011252
+        dcr_cps: 75.011252
+      - name: "balanced_032"
+        description: "平衡噪声：总噪声约 32 hits/frame"
+        background_cps: 100.020005
+        dcr_cps: 100.020005
+      - name: "balanced_048"
+        description: "平衡噪声：总噪声约 48 hits/frame"
+        background_cps: 150.045018
+        dcr_cps: 150.045018
+      - name: "balanced_064"
+        description: "平衡噪声：总噪声约 64 hits/frame"
+        background_cps: 200.080043
+        dcr_cps: 200.080043
+      - name: "balanced_096"
+        description: "平衡噪声：总噪声约 96 hits/frame"
+        background_cps: 300.180144
+        dcr_cps: 300.180144
+      - name: "balanced_128"
+        description: "平衡噪声：总噪声约 128 hits/frame"
+        background_cps: 400.320342
+        dcr_cps: 400.320342
+      - name: "balanced_192"
+        description: "平衡噪声：总噪声约 192 hits/frame"
+        background_cps: 600.721154
+        dcr_cps: 600.721154
+      - name: "balanced_256"
+        description: "平衡噪声：总噪声约 256 hits/frame"
+        background_cps: 801.282737
+        dcr_cps: 801.282737
